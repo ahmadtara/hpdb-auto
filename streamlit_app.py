@@ -70,4 +70,44 @@ if kmz_file and template_file:
 
     st.write("📌 Total Placemarks terbaca:", len(placemarks))
     df_all = pd.DataFrame(placemarks)
-    st.dataframe(
+    st.dataframe(df_all.head(20))
+
+    project_name = kmz_file.name.replace(".kmz", "")
+
+    # Gunakan folder terakhir dari path untuk filter
+    def last_folder(path):
+        return (path or "").upper().split("/")[-1]
+
+    df_fat = [p for p in placemarks if last_folder(p["folder"]) == "FAT"]
+    df_fdt = [p for p in placemarks if last_folder(p["folder"]) == "FDT"]
+    df_hp = [p for p in placemarks if last_folder(p["folder"]) == "HP COVER"]
+    df_pole = [p for p in placemarks if last_folder(p["folder"]) == "NEW POLE 7-3"]
+
+    st.write("📊 Jumlah FAT:", len(df_fat))
+    st.write("📊 Jumlah FDT:", len(df_fdt))
+    st.write("📊 Jumlah HP COVER:", len(df_hp))
+    st.write("📊 Jumlah POLE:", len(df_pole))
+
+    df_template = pd.read_excel(template_file)
+
+    for i in range(min(len(df_hp), len(df_template))):
+        if i < len(df_fat):
+            fat = df_fat[i]
+            df_template.at[i, "FATID"] = fat["name"]
+            df_template.at[i, "Pole Latitude"] = fat["lat"]
+            df_template.at[i, "Pole Longitude"] = fat["lon"]
+            df_template.at[i, "Pole ID"] = find_matching_pole(fat, df_pole)
+            df_template.at[i, "fdtcode"] = df_fdt[i]["name"] if i < len(df_fdt) else f"FDT_{i+1}"
+            df_template.at[i, "Clustername"] = project_name
+            df_template.at[i, "Commercial_name"] = project_name
+
+        df_template.at[i, "homenumber"] = df_hp[i]["name"]
+        df_template.at[i, "Latitude_homepass"] = df_hp[i]["lat"]
+        df_template.at[i, "Longitude_homepass"] = df_hp[i]["lon"]
+
+    st.success("✅ Data berhasil dimasukkan ke dalam TEMPLATE.")
+    st.dataframe(df_template.head(10))
+
+    output = BytesIO()
+    df_template.to_excel(output, index=False)
+    st.download_button("📥 Download File Hasil", output.getvalue(), file_name="TEMPLATE_HASIL_HPDB.xlsx")
