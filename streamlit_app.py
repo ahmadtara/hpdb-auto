@@ -14,7 +14,6 @@ def extract_placemarks(kmz_bytes):
         placemarks = []
         name_el = folder.find("kml:name", ns)
         folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
-
         new_path = f"{path}/{folder_name}" if path else folder_name
 
         for sub in folder.findall("kml:Folder", ns):
@@ -45,7 +44,6 @@ def extract_placemarks(kmz_bytes):
             for folder in root.findall(".//kml:Folder", ns):
                 all_placemarks += recurse_folder(folder, ns)
 
-            # Kelompokkan berdasarkan folder
             data = {"FAT": [], "NEW POLE 7-3": [], "FDT": [], "HP COVER": []}
             for p in all_placemarks:
                 for key in data:
@@ -53,6 +51,12 @@ def extract_placemarks(kmz_bytes):
                         data[key].append(p)
                         break
             return data
+
+def find_nearest_fat(fatcode, fat_list):
+    for fat in fat_list:
+        if fatcode in fat["name"]:
+            return fat
+    return None
 
 def find_nearest_pole(fat, poles, tol=0.0001):
     for pole in poles:
@@ -70,22 +74,40 @@ if kmz_file and template_file:
     fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
     hp_list = placemarks["HP COVER"]
 
-    for i in range(len(df_template)):
-        if i < len(fat_list):
-            fat = fat_list[i]
-            df_template.at[i, "FAT ID"] = fat["name"]
-            df_template.at[i, "Pole Latitude"] = fat["lat"]
-            df_template.at[i, "Pole Longitude"] = fat["lon"]
-            df_template.at[i, "Pole ID"] = find_nearest_pole(fat, pole_list)
+    row = 0
+    for hp in hp_list:
+        if row >= len(df_template):
+            break
 
-        if i < len(hp_list):
-            df_template.at[i, "homenumber"] = hp_list[i]["name"]
-            df_template.at[i, "Latitude_homepass"] = hp_list[i]["lat"]
-            df_template.at[i, "Longitude_homepass"] = hp_list[i]["lon"]
+        # Ambil fatcode dari path (contoh: HP COVER/A03/NN-73 -> A03)
+        fatcode = "UNKNOWN"
+        path_parts = hp["path"].split("/")
+        for part in path_parts:
+            if part.startswith("A") and len(part) == 3:
+                fatcode = part
+                break
 
-        df_template.at[i, "fdtcode"] = fdtcode
-        df_template.at[i, "Clustername"] = kmz_name
-        df_template.at[i, "Commercial_name"] = kmz_name
+        df_template.at[row, "fatcode"] = fatcode
+        df_template.at[row, "homenumber"] = hp["name"]
+        df_template.at[row, "Latitude_homepass"] = hp["lat"]
+        df_template.at[row, "Longitude_homepass"] = hp["lon"]
+
+        # Cari FAT ID berdasarkan fatcode
+        matched_fat = find_nearest_fat(fatcode, fat_list)
+        if matched_fat:
+            df_template.at[row, "FAT ID"] = matched_fat["name"]
+            df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
+            df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
+            df_template.at[row, "Pole ID"] = find_nearest_pole(matched_fat, pole_list)
+        else:
+            df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
+            df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
+
+        df_template.at[row, "fdtcode"] = fdtcode
+        df_template.at[row, "Clustername"] = kmz_name
+        df_template.at[row, "Commercial_name"] = kmz_name
+
+        row += 1
 
     st.success("✅ Data berhasil dimasukkan ke dalam template.")
     st.dataframe(df_template.head(10))
