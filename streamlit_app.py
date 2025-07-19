@@ -19,14 +19,15 @@ def extract_kml_from_kmz(kmz_bytes):
             tree = ET.parse(kml_file)
             return tree.getroot()
 
-def extract_placemarks(elem, folder=None):
+def extract_placemarks(elem, path=""):
     placemarks = []
     for child in elem:
         tag = child.tag.split("}")[-1]
         if tag == "Folder":
             name_el = child.find("./*[local-name()='name']")
-            folder_name = name_el.text if name_el is not None else folder
-            placemarks += extract_placemarks(child, folder_name)
+            subfolder_name = name_el.text.strip() if name_el is not None else "(no name)"
+            new_path = f"{path}/{subfolder_name}" if path else subfolder_name
+            placemarks += extract_placemarks(child, new_path)
         elif tag == "Placemark":
             name_el = child.find("./*[local-name()='name']")
             coord_el = child.find(".//*[local-name()='coordinates']")
@@ -36,7 +37,7 @@ def extract_placemarks(elem, folder=None):
                 if len(coord_text) >= 2:
                     lon, lat = coord_text[0], coord_text[1]
                     placemarks.append({
-                        "folder": folder,
+                        "folder": path,
                         "name": name,
                         "lat": float(lat.strip()),
                         "lon": float(lon.strip())
@@ -82,10 +83,10 @@ if kmz_file:
 if kmz_file and template_file and placemarks:
     project_name = kmz_file.name.replace(".kmz", "")
 
-    df_fat = [p for p in placemarks if p["folder"] and "FAT" in p["folder"].upper()]
-    df_fdt = [p for p in placemarks if p["folder"] and "FDT" in p["folder"].upper()]
-    df_hp = [p for p in placemarks if "HP COVER" in (p["folder"] or "").upper()]
-    df_pole = [p for p in placemarks if "NEW POLE 7-3" in (p["folder"] or "").upper()]
+    df_fat = [p for p in placemarks if "FAT" in p["folder"].upper()]
+    df_fdt = [p for p in placemarks if "FDT" in p["folder"].upper()]
+    df_hp = [p for p in placemarks if "HP COVER" in p["folder"].upper()]
+    df_pole = [p for p in placemarks if "NEW POLE 7-3" in p["folder"].upper()]
 
     df_template = pd.read_excel(template_file)
 
