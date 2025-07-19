@@ -3,15 +3,15 @@ import pandas as pd
 import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
-import requests
-import time
+import googlemaps
+
+# API Key Google Maps Anda
+gmaps = googlemaps.Client(key="AIzaSyCHSycfkqShMk_-kgOaHeO48ygLqoTmASk")
 
 st.title("📍 KMZ ➜ HPDB (Auto-Fill)")
 
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
-
-GOOGLE_MAPS_API_KEY = "AIzaSyAOVYRIgupAurZup5y1PRh8Ismb1A3lLao"
 
 def extract_placemarks(kmz_bytes):
     def recurse_folder(folder, ns, path=""):
@@ -48,6 +48,7 @@ def extract_placemarks(kmz_bytes):
             for folder in root.findall(".//kml:Folder", ns):
                 all_placemarks += recurse_folder(folder, ns)
 
+            # Kelompokkan berdasarkan folder
             data = {
                 "FAT": [], 
                 "NEW POLE 7-3": [], 
@@ -83,36 +84,25 @@ def find_matching_pole(fat, all_poles, tol=0.0001):
             return pole["name"]
     return "POLE_NOT_FOUND"
 
-def reverse_geocode(lat, lon):
+# Fungsi ambil alamat dari koordinat
+def reverse_address_component(lat, lon):
     try:
-        url = "https://maps.googleapis.com/maps/api/geocode/json"
-        params = {
-            "latlng": f"{lat},{lon}",
-            "key": GOOGLE_MAPS_API_KEY
-        }
-        response = requests.get(url, params=params)
-        data = response.json()
-        if data["status"] != "OK":
-            return {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
-
-        components = data["results"][0]["address_components"]
-        result = {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
-
-        for comp in components:
-            types = comp["types"]
+        res = gmaps.reverse_geocode((lat, lon), language="id")
+        comps = res[0]["address_components"]
+        out = {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
+        for c in comps:
+            types = c["types"]
             if "postal_code" in types:
-                result["postalcode"] = comp["long_name"]
-            elif "sublocality_level_1" in types or "administrative_area_level_4" in types:
-                result["district"] = comp["long_name"].upper()
-            elif "administrative_area_level_3" in types:
-                result["subdistrict"] = comp["long_name"].upper()
+                out["postalcode"] = c["long_name"]
+            elif "administrative_area_level_3" in types or "sublocality_level_2" in types:
+                out["district"] = c["long_name"].upper()
+            elif "administrative_area_level_2" in types or "sublocality_level_1" in types:
+                out["subdistrict"] = c["long_name"].upper()
             elif "route" in types:
-                result["street"] = comp["long_name"]
-
-        return result
+                out["street"] = c["long_name"]
+        return out
     except Exception as e:
-        print("Reverse geocode error:", e)
-        return {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
+        return {"postalcode": "ERROR", "district": "ERROR", "subdistrict": "ERROR", "street": "ERROR"}
 
 if kmz_file and template_file:
     kmz_name = kmz_file.name.replace(".kmz", "")
@@ -122,11 +112,13 @@ if kmz_file and template_file:
     fat_list = placemarks["FAT"]
     hp_list = placemarks["HP COVER"]
     fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
+
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
     row = 0
     for hp in hp_list:
-        if row >= len(df_template): break
+        if row >= len(df_template):
+            break
 
         fatcode = extract_fatcode_from_path(hp["path"])
         df_template.at[row, "fatcode"] = fatcode
@@ -134,15 +126,12 @@ if kmz_file and template_file:
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        # Gunakan Google Maps Geocoding API
-        geo = reverse_geocode(hp["lat"], hp["lon"])
-        df_template.at[row, "postalcode"] = geo["postalcode"]
-        df_template.at[row, "district"] = geo["district"]
-        df_template.at[row, "subdistrict"] = geo["subdistrict"]
-        df_template.at[row, "street"] = geo["street"]
-
-        # Delay agar tidak over quota Google (max 50 req/s free)
-        time.sleep(0.2)
+        # Ambil data alamat dari koordinat
+        alamat = reverse_address_component(hp["lat"], hp["lon"])
+        df_template.at[row, "postalcode"] = alamat["postalcode"]
+        df_template.at[row, "district"] = alamat["district"]
+        df_template.at[row, "subdistrict"] = alamat["subdistrict"]
+        df_template.at[row, "street"] = alamat["street"]
 
         matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
@@ -160,7 +149,7 @@ if kmz_file and template_file:
 
         row += 1
 
-    st.success("✅ Data berhasil diisi dan dilengkapi dengan Google Maps API.")
+    st.success("✅ Data berhasil dimasukkan ke dalam template.")
     st.dataframe(df_template.head(10))
 
     output = BytesIO()
