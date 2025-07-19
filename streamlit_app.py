@@ -38,9 +38,6 @@ if kmz_file and template_file:
     fats = extract_fat_from_kmz(kmz_file.read())
     df_template = pd.read_excel(template_file)
 
-    st.success(f"✅ Jumlah FAT ditemukan: {len(fats)}")
-    st.write(fats)
-
     # Masukkan data FAT ke dalam template
     for i in range(min(len(fats), len(df_template))):
         df_template.at[i, "FAT ID"] = fats[i]["name"]
