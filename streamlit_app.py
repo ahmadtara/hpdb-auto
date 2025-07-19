@@ -1,108 +1,82 @@
 import streamlit as st
-import zipfile
-import os
-import tempfile
-import xml.etree.ElementTree as ET
 import pandas as pd
-from openpyxl import load_workbook
+import zipfile
+import xml.etree.ElementTree as ET
+from io import BytesIO
 
-def extract_kml(kmz_file, extract_path):
-    with zipfile.ZipFile(kmz_file, 'r') as kmz:
-        kmz.extractall(extract_path)
-    for root, _, files in os.walk(extract_path):
-        for file in files:
-            if file.endswith(".kml"):
-                return os.path.join(root, file)
-    return None
+st.title("📍 Konversi KMZ ➜ TEMPLATE HPDB")
 
-def parse_kml(kml_path):
-    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
-    tree = ET.parse(kml_path)
-    root = tree.getroot()
-    document = root.find('kml:Document', ns)
+kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-    fat_ids, poles, homes, fdt_codes = [], [], [], []
+def extract_kml_from_kmz(kmz_bytes):
+    with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+        kml_name = [f for f in z.namelist() if f.endswith(".kml")][0]
+        with z.open(kml_name) as kml_file:
+            tree = ET.parse(kml_file)
+            return tree.getroot()
 
-    for folder in document.findall('.//kml:Folder', ns):
-        folder_name_elem = folder.find('kml:name', ns)
-        folder_name = folder_name_elem.text.strip() if folder_name_elem is not None else ''
+def extract_placemarks(elem, ns, folder=None):
+    placemarks = []
+    for child in elem:
+        tag = child.tag.split("}")[-1]
+        if tag == "Folder":
+            folder_name_el = child.find("ns0:name", ns)
+            folder_name = folder_name_el.text if folder_name_el is not None else folder
+            placemarks += extract_placemarks(child, ns, folder_name)
+        elif tag == "Placemark":
+            name_el = child.find("ns0:name", ns)
+            coord_el = child.find(".//ns0:coordinates", ns)
+            if name_el is not None and coord_el is not None:
+                name = name_el.text.strip()
+                lon, lat, *_ = coord_el.text.strip().split(",")
+                placemarks.append({
+                    "folder": folder,
+                    "name": name,
+                    "lat": float(lat.strip()),
+                    "lon": float(lon.strip())
+                })
+    return placemarks
 
-        for placemark in folder.findall('kml:Placemark', ns):
-            name_elem = placemark.find('kml:name', ns)
-            coord_elem = placemark.find('.//kml:coordinates', ns)
-            if name_elem is None or coord_elem is None:
-                continue
+def find_matching_pole(fat_point, poles, tolerance=0.0001):
+    for p in poles:
+        if abs(p["lat"] - fat_point["lat"]) < tolerance and abs(p["lon"] - fat_point["lon"]) < tolerance:
+            return p["name"]
+    return "POLE_NOT_FOUND"
 
-            name = name_elem.text.strip()
-            coord_text = coord_elem.text.strip()
-            lon, lat, *_ = coord_text.split(',')
+if kmz_file and template_file:
+    root = extract_kml_from_kmz(kmz_file.read())
+    ns = {'ns0': 'http://www.opengis.net/kml/2.2'}
+    placemarks = extract_placemarks(root, ns)
 
-            lat, lon = float(lat), float(lon)
+    project_name = kmz_file.name.replace(".kmz", "")
 
-            if 'FAT' in folder_name.upper():
-                fat_ids.append(name)
-            elif 'NEW POLE 7-3' in folder_name.upper():
-                poles.append((name, lat, lon))
-            elif 'HP COVER' in folder_name.upper():
-                homes.append((name, lat, lon))
-            elif 'FDT' in folder_name.upper():
-                fdt_codes.append(name)
+    df_fat = [p for p in placemarks if p["folder"] and "FAT" in p["folder"].upper()]
+    df_fdt = [p for p in placemarks if p["folder"] and "FDT" in p["folder"].upper()]
+    df_hp = [p for p in placemarks if "HP COVER" in (p["folder"] or "").upper()]
+    df_pole = [p for p in placemarks if "NEW POLE 7-3" in (p["folder"] or "").upper()]
 
-    return fat_ids, poles, homes, fdt_codes
+    df_template = pd.read_excel(template_file)
 
-def extract_cluster_and_commercial(filename):
-    title = os.path.splitext(os.path.basename(filename))[0]
-    cluster = title.split(' - ')[0].strip()
-    return cluster, cluster  # Commercial_name = Clustername
+    for i in range(min(len(df_hp), len(df_template))):
+        if i < len(df_fat):
+            fat = df_fat[i]
+            df_template.at[i, "FATID"] = fat["name"]
+            df_template.at[i, "Pole Latitude"] = fat["lat"]
+            df_template.at[i, "Pole Longitude"] = fat["lon"]
+            df_template.at[i, "Pole ID"] = find_matching_pole(fat, df_pole)
+            df_template.at[i, "fdtcode"] = df_fdt[i]["name"] if i < len(df_fdt) else f"FDT_{i+1}"
+            df_template.at[i, "Clustername"] = project_name
+            df_template.at[i, "Commercial_name"] = project_name
 
-def write_to_template(fat_ids, poles, homes, fdt_codes, clustername, commercial_name, output_path):
-    template_path = "TEMPLATE HPDB.xlsx"
-    wb = load_workbook(template_path)
-    ws = wb["Homepass Database"]
+        df_template.at[i, "homenumber"] = df_hp[i]["name"]
+        df_template.at[i, "Latitude_homepass"] = df_hp[i]["lat"]
+        df_template.at[i, "Longitude_homepass"] = df_hp[i]["lon"]
 
-    start_row = 2  # row 1 = header
-    max_len = max(len(fat_ids), len(poles), len(homes), len(fdt_codes))
+    st.success("✅ Data berhasil dimasukkan ke dalam TEMPLATE.")
 
-    for i in range(max_len):
-        ws.cell(row=start_row + i, column=1, value=fat_ids[i] if i < len(fat_ids) else '')
-        ws.cell(row=start_row + i, column=2, value=poles[i][0] if i < len(poles) else '')
-        ws.cell(row=start_row + i, column=3, value=poles[i][1] if i < len(poles) else '')
-        ws.cell(row=start_row + i, column=4, value=poles[i][2] if i < len(poles) else '')
-        ws.cell(row=start_row + i, column=5, value=homes[i][0] if i < len(homes) else '')
-        ws.cell(row=start_row + i, column=6, value=homes[i][1] if i < len(homes) else '')
-        ws.cell(row=start_row + i, column=7, value=homes[i][2] if i < len(homes) else '')
-        ws.cell(row=start_row + i, column=8, value=fdt_codes[i] if i < len(fdt_codes) else '')
-        ws.cell(row=start_row + i, column=9, value=clustername)
-        ws.cell(row=start_row + i, column=10, value=commercial_name)
+    st.dataframe(df_template.head(10))
 
-    wb.save(output_path)
-
-def main():
-    st.title("📦 Konversi KMZ ke HPDB Excel")
-    uploaded_kmz = st.file_uploader("Unggah file .KMZ", type="kmz")
-
-    if uploaded_kmz:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            kmz_path = os.path.join(tmpdir, uploaded_kmz.name)
-            with open(kmz_path, 'wb') as f:
-                f.write(uploaded_kmz.read())
-
-            st.info("📤 Mengekstrak dan memproses...")
-            kml_path = extract_kml(kmz_path, tmpdir)
-
-            if not kml_path:
-                st.error("❌ Gagal mengekstrak file KML dari KMZ.")
-                return
-
-            fat_ids, poles, homes, fdt_codes = parse_kml(kml_path)
-            clustername, commercial_name = extract_cluster_and_commercial(uploaded_kmz.name)
-
-            output_file = os.path.join(tmpdir, "HPDB_Output.xlsx")
-            write_to_template(fat_ids, poles, homes, fdt_codes, clustername, commercial_name, output_file)
-
-            with open(output_file, "rb") as f:
-                st.success("✅ Selesai! Klik tombol di bawah untuk mengunduh:")
-                st.download_button("⬇️ Unduh HPDB_Output.xlsx", f, file_name="HPDB_Output.xlsx")
-
-if __name__ == "__main__":
-    main()
+    output = BytesIO()
+    df_template.to_excel(output, index=False)
+    st.download_button("📥 Download File Hasil", output.getvalue(), file_name="TEMPLATE_HASIL_HPDB.xlsx")
