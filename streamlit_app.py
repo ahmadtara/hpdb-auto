@@ -4,7 +4,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
 
-st.title("\ud83d\udccd Konversi KMZ \u2794 TEMPLATE HPDB")
+st.title("📍 Konversi KMZ ➜ TEMPLATE HPDB")
 
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
@@ -78,10 +78,10 @@ if kmz_file and template_file:
         df_template.at[i, "Latitude_homepass"] = df_hp[i]["lat"]
         df_template.at[i, "Longitude_homepass"] = df_hp[i]["lon"]
 
-    st.success("\u2705 Data berhasil dimasukkan ke dalam TEMPLATE.")
+    st.success("✅ Data berhasil dimasukkan ke dalam TEMPLATE.")
 
     st.dataframe(df_template.head(10))
 
     output = BytesIO()
     df_template.to_excel(output, index=False)
-    st.download_button("\ud83d\udcc5 Download File Hasil", output.getvalue(), file_name="TEMPLATE_HASIL_HPDB.xlsx")
+    st.download_button("📅 Download File Hasil", output.getvalue(), file_name="TEMPLATE_HASIL_HPDB.xlsx")
