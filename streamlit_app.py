@@ -44,6 +44,7 @@ def extract_placemarks(kmz_bytes):
             for folder in root.findall(".//kml:Folder", ns):
                 all_placemarks += recurse_folder(folder, ns)
 
+            # Kelompokkan berdasarkan folder
             data = {"FAT": [], "NEW POLE 7-3": [], "FDT": [], "HP COVER": []}
             for p in all_placemarks:
                 for key in data:
@@ -52,7 +53,16 @@ def extract_placemarks(kmz_bytes):
                         break
             return data
 
-def find_nearest_fat(fatcode, fat_list):
+def extract_fatcode_from_path(path):
+    """Ambil kode seperti A01, B02, C03 dari path folder"""
+    parts = path.split("/")
+    for part in parts:
+        if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+            return part
+    return "UNKNOWN"
+
+def find_fat_by_fatcode(fatcode, fat_list):
+    """Cari FAT yang mengandung fatcode pada namanya"""
     for fat in fat_list:
         if fatcode in fat["name"]:
             return fat
@@ -79,21 +89,13 @@ if kmz_file and template_file:
         if row >= len(df_template):
             break
 
-        # Ambil fatcode dari path (contoh: HP COVER/A03/NN-73 -> A03)
-        fatcode = "UNKNOWN"
-        path_parts = hp["path"].split("/")
-        for part in path_parts:
-            if part.startswith("A") and len(part) == 3:
-                fatcode = part
-                break
-
+        fatcode = extract_fatcode_from_path(hp["path"])
         df_template.at[row, "fatcode"] = fatcode
         df_template.at[row, "homenumber"] = hp["name"]
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        # Cari FAT ID berdasarkan fatcode
-        matched_fat = find_nearest_fat(fatcode, fat_list)
+        matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
             df_template.at[row, "FAT ID"] = matched_fat["name"]
             df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
