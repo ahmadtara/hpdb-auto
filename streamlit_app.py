@@ -10,14 +10,18 @@ kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
 def extract_kml_from_kmz(kmz_bytes):
-    with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-        kml_files = [f for f in z.namelist() if f.endswith(".kml")]
-        if not kml_files:
-            st.error("❌ File KMZ tidak berisi file .kml yang valid.")
-            return None
-        with z.open(kml_files[0]) as kml_file:
-            tree = ET.parse(kml_file)
-            return tree.getroot()
+    try:
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            kml_files = [f for f in z.namelist() if f.endswith(".kml")]
+            if not kml_files:
+                st.error("❌ File KMZ tidak berisi file .kml yang valid.")
+                return None
+            with z.open(kml_files[0]) as kml_file:
+                tree = ET.parse(kml_file)
+                return tree.getroot()
+    except Exception as e:
+        st.error(f"❌ Gagal membaca file KMZ: {e}")
+        return None
 
 def extract_placemarks(elem, path=""):
     placemarks = []
@@ -36,12 +40,21 @@ def extract_placemarks(elem, path=""):
                 coord_text = coord_el.text.strip().split(",")
                 if len(coord_text) >= 2:
                     lon, lat = coord_text[0], coord_text[1]
-                    placemarks.append({
-                        "folder": path,
-                        "name": name,
-                        "lat": float(lat.strip()),
-                        "lon": float(lon.strip())
-                    })
+                    try:
+                        placemarks.append({
+                            "folder": path,
+                            "name": name,
+                            "lat": float(lat.strip()),
+                            "lon": float(lon.strip())
+                        })
+                    except ValueError:
+                        st.warning(f"⚠️ Koordinat tidak valid untuk titik: {name}")
+                else:
+                    st.warning(f"⚠️ Format koordinat salah pada: {name}")
+            else:
+                if name_el is not None:
+                    name = name_el.text.strip()
+                    st.warning(f"⚠️ Tidak ditemukan koordinat untuk Placemark: {name}")
     return placemarks
 
 def find_matching_pole(fat_point, poles, tolerance=0.0001):
