@@ -9,7 +9,7 @@ st.title("📍 Konversi KMZ ➜ TEMPLATE HPDB")
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-# Ekstrak .kml dari .kmz
+# Ekstrak file .kml dari .kmz
 def extract_kml_from_kmz(kmz_bytes):
     with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
         kml_name = [f for f in z.namelist() if f.endswith(".kml")][0]
@@ -17,7 +17,7 @@ def extract_kml_from_kmz(kmz_bytes):
             tree = ET.parse(kml_file)
             return tree.getroot()
 
-# Ekstrak semua placemarks secara rekursif dan simpan folder path bertingkat
+# Ekstrak semua placemark termasuk nested folder (rekursif)
 def extract_placemarks(elem, ns, folder_path=""):
     placemarks = []
     for child in elem:
@@ -41,13 +41,14 @@ def extract_placemarks(elem, ns, folder_path=""):
                 })
     return placemarks
 
-# Cari tiang terdekat berdasarkan koordinat FAT
+# Temukan tiang terdekat dari FAT berdasarkan koordinat
 def find_matching_pole(fat_point, poles, tolerance=0.0001):
     for p in poles:
         if abs(p["lat"] - fat_point["lat"]) < tolerance and abs(p["lon"] - fat_point["lon"]) < tolerance:
             return p["name"]
     return "POLE_NOT_FOUND"
 
+# Jalankan jika file diunggah
 if kmz_file and template_file:
     root = extract_kml_from_kmz(kmz_file.read())
     ns = {'ns0': 'http://www.opengis.net/kml/2.2'}
@@ -55,16 +56,16 @@ if kmz_file and template_file:
 
     project_name = kmz_file.name.replace(".kmz", "")
 
-    # Filter berdasarkan nama folder
+    # Filter placemark berdasarkan folder path
     df_fat = [p for p in placemarks if "FAT" in p["folder"].upper()]
     df_fdt = [p for p in placemarks if "FDT" in p["folder"].upper()]
     df_hp = [p for p in placemarks if "HP COVER" in p["folder"].upper()]
     df_pole = [p for p in placemarks if "NEW POLE 7-3" in p["folder"].upper()]
 
-    # Buka template
+    # Load template Excel
     df_template = pd.read_excel(template_file)
 
-    # Proses data ke dalam template
+    # Isi data ke dalam template
     for i in range(min(len(df_hp), len(df_template))):
         if i < len(df_fat):
             fat = df_fat[i]
@@ -80,4 +81,17 @@ if kmz_file and template_file:
         df_template.at[i, "Latitude_homepass"] = df_hp[i]["lat"]
         df_template.at[i, "Longitude_homepass"] = df_hp[i]["lon"]
 
+    # Tampilkan hasil
     st.success("✅ Data berhasil dimasukkan ke dalam TEMPLATE.")
+    st.dataframe(df_template.head(10))
+
+    # Siapkan download file
+    output = BytesIO()
+    df_template.to_excel(output, index=False)
+    output.seek(0)  # Penting agar data bisa terbaca dari awal
+    st.download_button(
+        label="📥 Download File Hasil",
+        data=output,
+        file_name="TEMPLATE_HASIL_HPDB.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
