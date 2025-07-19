@@ -80,4 +80,4 @@ if kmz_file and template_file:
         df_template.at[i, "Latitude_homepass"] = df_hp[i]["lat"]
         df_template.at[i, "Longitude_homepass"] = df_hp[i]["lon"]
 
-    st.success("✅
+    st.success("✅ Data berhasil dimasukkan ke dalam TEMPLATE.")
