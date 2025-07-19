@@ -19,17 +19,17 @@ def extract_kml_from_kmz(kmz_bytes):
             tree = ET.parse(kml_file)
             return tree.getroot()
 
-def extract_placemarks(elem, ns, folder=None):
+def extract_placemarks(elem, folder=None):
     placemarks = []
     for child in elem:
         tag = child.tag.split("}")[-1]
         if tag == "Folder":
-            folder_name_el = child.find("ns0:name", ns)
-            folder_name = folder_name_el.text if folder_name_el is not None else folder
-            placemarks += extract_placemarks(child, ns, folder_name)
+            name_el = child.find("./*[local-name()='name']")
+            folder_name = name_el.text if name_el is not None else folder
+            placemarks += extract_placemarks(child, folder_name)
         elif tag == "Placemark":
-            name_el = child.find("ns0:name", ns)
-            coord_el = child.find(".//ns0:coordinates", ns)
+            name_el = child.find("./*[local-name()='name']")
+            coord_el = child.find(".//*[local-name()='coordinates']")
             if name_el is not None and coord_el is not None and coord_el.text:
                 name = name_el.text.strip()
                 coord_text = coord_el.text.strip().split(",")
@@ -53,13 +53,13 @@ def print_structure(elem, level=0):
     tag = elem.tag.split("}")[-1]
     indent = "  " * level
     if tag == "Folder":
-        name_el = elem.find("{http://www.opengis.net/kml/2.2}name")
+        name_el = elem.find("./*[local-name()='name']")
         name = name_el.text.strip() if name_el is not None else "(no name)"
         st.text(f"{indent}- 📁 {name}")
         for child in elem:
             print_structure(child, level + 1)
     elif tag == "Placemark":
-        name_el = elem.find("{http://www.opengis.net/kml/2.2}name")
+        name_el = elem.find("./*[local-name()='name']")
         name = name_el.text.strip() if name_el is not None else "(no name)"
         st.text(f"{indent}- 📌 {name}")
 
@@ -67,8 +67,7 @@ placemarks = []
 if kmz_file:
     root = extract_kml_from_kmz(kmz_file.read())
     if root is not None:
-        ns = {'ns0': 'http://www.opengis.net/kml/2.2'}
-        placemarks = extract_placemarks(root, ns)
+        placemarks = extract_placemarks(root)
 
         df_all = pd.DataFrame(placemarks)
         st.subheader("📄 Daftar Semua Titik dari KMZ")
