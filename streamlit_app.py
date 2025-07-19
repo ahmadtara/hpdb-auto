@@ -3,6 +3,8 @@ import pandas as pd
 import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 
 st.title("📍 KMZ ➜ HPDB (Auto-Fill)")
 
@@ -62,7 +64,6 @@ def extract_placemarks(kmz_bytes):
             return data
 
 def extract_fatcode_from_path(path):
-    """Ambil kode seperti A01, B02, C03 dari path folder"""
     parts = path.split("/")
     for part in parts:
         if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
@@ -70,14 +71,12 @@ def extract_fatcode_from_path(path):
     return "UNKNOWN"
 
 def find_fat_by_fatcode(fatcode, fat_list):
-    """Cari FAT yang mengandung fatcode pada namanya"""
     for fat in fat_list:
         if fatcode in fat["name"]:
             return fat
     return None
 
 def find_matching_pole(fat, all_poles, tol=0.0001):
-    """Cari nama pole yang koordinatnya sama dengan FAT"""
     for pole in all_poles:
         if abs(fat["lat"] - pole["lat"]) < tol and abs(fat["lon"] - pole["lon"]) < tol:
             return pole["name"]
@@ -92,8 +91,23 @@ if kmz_file and template_file:
     hp_list = placemarks["HP COVER"]
     fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
 
-    # Gabungkan semua jenis POLE
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
+
+    # 🔁 Setup Geocoder
+    geolocator = Nominatim(user_agent="hpdb_app")
+    geocode = RateLimiter(geolocator.reverse, min_delay_seconds=1)
+
+    # Ambil data lokasi dari 1 titik HP COVER
+    if hp_list:
+        first_hp = hp_list[0]
+        location = geocode((first_hp["lat"], first_hp["lon"]), language='id')
+        address = location.raw.get("address", {}) if location else {}
+
+        postalcode = address.get("postcode", "")
+        district = address.get("suburb", "") or address.get("village", "") or address.get("hamlet", "")
+        subdistrict = address.get("city_district", "") or address.get("district", "")
+    else:
+        postalcode = subdistrict = district = ""
 
     row = 0
     for hp in hp_list:
@@ -105,6 +119,12 @@ if kmz_file and template_file:
         df_template.at[row, "homenumber"] = hp["name"]
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
+
+        # 🆕 Lokasi dari reverse geocoding
+        df_template.at[row, "postalcode"] = postalcode
+        df_template.at[row, "district"] = district
+        df_template.at[row, "subdistrict"] = subdistrict
+        df_template.at[row, "street"] = f"Jalan {hp['name']}"
 
         matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
