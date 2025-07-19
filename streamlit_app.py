@@ -59,13 +59,24 @@ if kmz_file and template_file:
     ns = {'ns0': 'http://www.opengis.net/kml/2.2'}
     placemarks = extract_placemarks(root, ns)
 
+    st.write("📌 Jumlah total Placemarks:", len(placemarks))
+    st.dataframe(pd.DataFrame(placemarks).head(20))
+
     project_name = kmz_file.name.replace(".kmz", "")
 
-    # Filter berdasarkan bagian dari path folder
-    df_fat = [p for p in placemarks if "FAT" in (p["folder"] or "").upper()]
-    df_fdt = [p for p in placemarks if "FDT" in (p["folder"] or "").upper()]
-    df_hp = [p for p in placemarks if "HP COVER" in (p["folder"] or "").upper()]
-    df_pole = [p for p in placemarks if "NEW POLE 7-3" in (p["folder"] or "").upper()]
+    # Gunakan folder terakhir dalam path untuk penyaringan
+    def last_folder(path):
+        return (path or "").upper().split("/")[-1]
+
+    df_fat = [p for p in placemarks if last_folder(p["folder"]) == "FAT"]
+    df_fdt = [p for p in placemarks if last_folder(p["folder"]) == "FDT"]
+    df_hp = [p for p in placemarks if last_folder(p["folder"]) == "HP COVER"]
+    df_pole = [p for p in placemarks if last_folder(p["folder"]) == "NEW POLE 7-3"]
+
+    st.write("📊 Jumlah FAT:", len(df_fat))
+    st.write("📊 Jumlah FDT:", len(df_fdt))
+    st.write("📊 Jumlah HP COVER:", len(df_hp))
+    st.write("📊 Jumlah POLE 7-3:", len(df_pole))
 
     df_template = pd.read_excel(template_file)
 
