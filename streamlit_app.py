@@ -46,7 +46,6 @@ def extract_placemarks(kmz_bytes):
             for folder in root.findall(".//kml:Folder", ns):
                 all_placemarks += recurse_folder(folder, ns)
 
-            # Kelompokkan berdasarkan folder
             data = {
                 "FAT": [], 
                 "NEW POLE 7-3": [], 
@@ -93,21 +92,8 @@ if kmz_file and template_file:
 
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
-    # 🔁 Setup Geocoder
     geolocator = Nominatim(user_agent="hpdb_app")
     geocode = RateLimiter(geolocator.reverse, min_delay_seconds=1)
-
-    # Ambil data lokasi dari 1 titik HP COVER
-    if hp_list:
-        first_hp = hp_list[0]
-        location = geocode((first_hp["lat"], first_hp["lon"]), language='id')
-        address = location.raw.get("address", {}) if location else {}
-
-        postalcode = address.get("postcode", "")
-        district = address.get("suburb", "") or address.get("village", "") or address.get("hamlet", "")
-        subdistrict = address.get("city_district", "") or address.get("district", "")
-    else:
-        postalcode = subdistrict = district = ""
 
     row = 0
     for hp in hp_list:
@@ -120,11 +106,24 @@ if kmz_file and template_file:
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        # 🆕 Lokasi dari reverse geocoding
+        # Reverse geocoding untuk titik ini
+        location_hp = geocode((hp["lat"], hp["lon"]), language='id')
+        address_hp = location_hp.raw.get("address", {}) if location_hp else {}
+
+        postalcode = address_hp.get("postcode", "")
+        district = address_hp.get("suburb", "") or address_hp.get("village", "") or address_hp.get("hamlet", "")
+        subdistrict = address_hp.get("city_district", "") or address_hp.get("district", "")
+        street_name = (
+            address_hp.get("road") or
+            address_hp.get("residential") or
+            address_hp.get("neighbourhood") or
+            "JALAN_TIDAK_DIKETAHUI"
+        )
+
         df_template.at[row, "postalcode"] = postalcode
         df_template.at[row, "district"] = district
         df_template.at[row, "subdistrict"] = subdistrict
-        df_template.at[row, "street"] = f"Jalan {hp['name']}"
+        df_template.at[row, "street"] = street_name
 
         matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
