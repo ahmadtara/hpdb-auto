@@ -45,7 +45,15 @@ def extract_placemarks(kmz_bytes):
                 all_placemarks += recurse_folder(folder, ns)
 
             # Kelompokkan berdasarkan folder
-            data = {"FAT": [], "NEW POLE 7-3": [], "FDT": [], "HP COVER": []}
+            data = {
+                "FAT": [], 
+                "NEW POLE 7-3": [], 
+                "EXISTING POLE EMR 7-3": [],
+                "EXISTING POLE EMR 7-4": [],
+                "FDT": [], 
+                "HP COVER": []
+            }
+
             for p in all_placemarks:
                 for key in data:
                     if key in p["path"]:
@@ -68,8 +76,9 @@ def find_fat_by_fatcode(fatcode, fat_list):
             return fat
     return None
 
-def find_nearest_pole(fat, poles, tol=0.0001):
-    for pole in poles:
+def find_matching_pole(fat, all_poles, tol=0.0001):
+    """Cari nama pole yang koordinatnya sama dengan FAT"""
+    for pole in all_poles:
         if abs(fat["lat"] - pole["lat"]) < tol and abs(fat["lon"] - pole["lon"]) < tol:
             return pole["name"]
     return "POLE_NOT_FOUND"
@@ -80,9 +89,11 @@ if kmz_file and template_file:
     df_template = pd.read_excel(template_file)
 
     fat_list = placemarks["FAT"]
-    pole_list = placemarks["NEW POLE 7-3"]
-    fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
     hp_list = placemarks["HP COVER"]
+    fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
+
+    # Gabungkan semua jenis POLE
+    all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
     row = 0
     for hp in hp_list:
@@ -100,7 +111,7 @@ if kmz_file and template_file:
             df_template.at[row, "FAT ID"] = matched_fat["name"]
             df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
             df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
-            df_template.at[row, "Pole ID"] = find_nearest_pole(matched_fat, pole_list)
+            df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
         else:
             df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
             df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
