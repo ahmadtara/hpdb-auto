@@ -11,6 +11,8 @@ st.title("📍 KMZ ➜ HPDB (Auto-Fill)")
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
+GOOGLE_MAPS_API_KEY = "AIzaSyAOVYRIgupAurZup5y1PRh8Ismb1A3lLao"
+
 def extract_placemarks(kmz_bytes):
     def recurse_folder(folder, ns, path=""):
         placemarks = []
@@ -83,19 +85,33 @@ def find_matching_pole(fat, all_poles, tol=0.0001):
 
 def reverse_geocode(lat, lon):
     try:
-        response = requests.get(
-            "https://nominatim.openstreetmap.org/reverse",
-            params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
-            headers={"User-Agent": "streamlit-kmz-converter"}
-        )
-        data = response.json().get("address", {})
-        return {
-            "postalcode": data.get("postcode", ""),
-            "district": data.get("suburb", "").upper(),
-            "subdistrict": data.get("city_district", "").upper(),
-            "street": data.get("road", "")
+        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "latlng": f"{lat},{lon}",
+            "key": GOOGLE_MAPS_API_KEY
         }
-    except:
+        response = requests.get(url, params=params)
+        data = response.json()
+        if data["status"] != "OK":
+            return {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
+
+        components = data["results"][0]["address_components"]
+        result = {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
+
+        for comp in components:
+            types = comp["types"]
+            if "postal_code" in types:
+                result["postalcode"] = comp["long_name"]
+            elif "sublocality_level_1" in types or "administrative_area_level_4" in types:
+                result["district"] = comp["long_name"].upper()
+            elif "administrative_area_level_3" in types:
+                result["subdistrict"] = comp["long_name"].upper()
+            elif "route" in types:
+                result["street"] = comp["long_name"]
+
+        return result
+    except Exception as e:
+        print("Reverse geocode error:", e)
         return {"postalcode": "", "district": "", "subdistrict": "", "street": ""}
 
 if kmz_file and template_file:
@@ -118,15 +134,15 @@ if kmz_file and template_file:
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        # Reverse geocoding
+        # Gunakan Google Maps Geocoding API
         geo = reverse_geocode(hp["lat"], hp["lon"])
         df_template.at[row, "postalcode"] = geo["postalcode"]
         df_template.at[row, "district"] = geo["district"]
         df_template.at[row, "subdistrict"] = geo["subdistrict"]
         df_template.at[row, "street"] = geo["street"]
 
-        # Rate limit handling (Nominatim allows 1 req/s)
-        time.sleep(1)
+        # Delay agar tidak over quota Google (max 50 req/s free)
+        time.sleep(0.2)
 
         matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
@@ -144,7 +160,7 @@ if kmz_file and template_file:
 
         row += 1
 
-    st.success("✅ Data berhasil dimasukkan dan dilengkapi via geolokasi.")
+    st.success("✅ Data berhasil diisi dan dilengkapi dengan Google Maps API.")
     st.dataframe(df_template.head(10))
 
     output = BytesIO()
