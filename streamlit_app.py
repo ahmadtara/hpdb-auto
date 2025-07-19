@@ -23,7 +23,7 @@ def extract_placemarks(elem, path=""):
     placemarks = []
     for child in elem:
         tag = child.tag.split("}")[-1]
-        if tag == "Folder":
+        if tag in ("Folder", "Document"):
             name_el = child.find("./*[local-name()='name']")
             subfolder_name = name_el.text.strip() if name_el is not None else "(no name)"
             new_path = f"{path}/{subfolder_name}" if path else subfolder_name
@@ -53,7 +53,7 @@ def find_matching_pole(fat_point, poles, tolerance=0.0001):
 def print_structure(elem, level=0):
     tag = elem.tag.split("}")[-1]
     indent = "  " * level
-    if tag == "Folder":
+    if tag in ("Folder", "Document"):
         name_el = elem.find("./*[local-name()='name']")
         name = name_el.text.strip() if name_el is not None else "(no name)"
         st.text(f"{indent}- 📁 {name}")
