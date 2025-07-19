@@ -1,4 +1,4 @@
-import streamlit as st
+""import streamlit as st
 import pandas as pd
 import zipfile
 import xml.etree.ElementTree as ET
@@ -11,8 +11,11 @@ template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
 def extract_kml_from_kmz(kmz_bytes):
     with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-        kml_name = [f for f in z.namelist() if f.endswith(".kml")][0]
-        with z.open(kml_name) as kml_file:
+        kml_files = [f for f in z.namelist() if f.endswith(".kml")]
+        if not kml_files:
+            st.error("❌ File KMZ tidak berisi file .kml yang valid.")
+            return None
+        with z.open(kml_files[0]) as kml_file:
             tree = ET.parse(kml_file)
             return tree.getroot()
 
@@ -27,15 +30,17 @@ def extract_placemarks(elem, ns, folder=None):
         elif tag == "Placemark":
             name_el = child.find("ns0:name", ns)
             coord_el = child.find(".//ns0:coordinates", ns)
-            if name_el is not None and coord_el is not None:
+            if name_el is not None and coord_el is not None and coord_el.text:
                 name = name_el.text.strip()
-                lon, lat, *_ = coord_el.text.strip().split(",")
-                placemarks.append({
-                    "folder": folder,
-                    "name": name,
-                    "lat": float(lat.strip()),
-                    "lon": float(lon.strip())
-                })
+                coord_text = coord_el.text.strip().split(",")
+                if len(coord_text) >= 2:
+                    lon, lat = coord_text[0], coord_text[1]
+                    placemarks.append({
+                        "folder": folder,
+                        "name": name,
+                        "lat": float(lat.strip()),
+                        "lon": float(lon.strip())
+                    })
     return placemarks
 
 def find_matching_pole(fat_point, poles, tolerance=0.0001):
@@ -44,16 +49,38 @@ def find_matching_pole(fat_point, poles, tolerance=0.0001):
             return p["name"]
     return "POLE_NOT_FOUND"
 
+def print_structure(elem, level=0):
+    tag = elem.tag.split("}")[-1]
+    indent = "  " * level
+    if tag == "Folder":
+        name_el = elem.find("{http://www.opengis.net/kml/2.2}name")
+        name = name_el.text.strip() if name_el is not None else "(no name)"
+        st.text(f"{indent}- 📁 {name}")
+        for child in elem:
+            print_structure(child, level + 1)
+    elif tag == "Placemark":
+        name_el = elem.find("{http://www.opengis.net/kml/2.2}name")
+        name = name_el.text.strip() if name_el is not None else "(no name)"
+        st.text(f"{indent}- 📌 {name}")
+
+placemarks = []
 if kmz_file:
     root = extract_kml_from_kmz(kmz_file.read())
-    ns = {'ns0': 'http://www.opengis.net/kml/2.2'}
-    placemarks = extract_placemarks(root, ns)
+    if root is not None:
+        ns = {'ns0': 'http://www.opengis.net/kml/2.2'}
+        placemarks = extract_placemarks(root, ns)
 
-    df_all = pd.DataFrame(placemarks)
-    st.subheader("📄 Daftar Semua Titik dari KMZ")
-    st.dataframe(df_all)
+        df_all = pd.DataFrame(placemarks)
+        st.subheader("📄 Daftar Semua Titik dari KMZ")
+        if not df_all.empty:
+            st.dataframe(df_all)
+        else:
+            st.warning("Tidak ada titik (Placemark) yang ditemukan dalam file KMZ.")
 
-if kmz_file and template_file:
+        st.subheader("📂 Struktur Folder di dalam KMZ")
+        print_structure(root)
+
+if kmz_file and template_file and placemarks:
     project_name = kmz_file.name.replace(".kmz", "")
 
     df_fat = [p for p in placemarks if p["folder"] and "FAT" in p["folder"].upper()]
@@ -79,7 +106,6 @@ if kmz_file and template_file:
         df_template.at[i, "Longitude_homepass"] = df_hp[i]["lon"]
 
     st.success("✅ Data berhasil dimasukkan ke dalam TEMPLATE.")
-
     st.dataframe(df_template.head(10))
 
     output = BytesIO()
