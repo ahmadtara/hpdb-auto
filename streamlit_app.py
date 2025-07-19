@@ -92,8 +92,21 @@ if kmz_file and template_file:
 
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
+    # Inisialisasi geolocator
     geolocator = Nominatim(user_agent="hpdb_app")
     geocode = RateLimiter(geolocator.reverse, min_delay_seconds=1)
+
+    # Ambil informasi kelurahan/kecamatan/kode pos dari salah satu titik HP COVER
+    sample_hp = hp_list[0] if hp_list else None
+    if sample_hp:
+        location = geocode((sample_hp["lat"], sample_hp["lon"]), language='id')
+        address = location.raw.get("address", {}) if location else {}
+
+        postalcode = address.get("postcode", "")
+        district = (address.get("suburb") or address.get("village") or address.get("hamlet") or "").upper()
+        subdistrict = (address.get("city_district") or address.get("district") or "").upper()
+    else:
+        postalcode = district = subdistrict = ""
 
     row = 0
     for hp in hp_list:
@@ -106,13 +119,9 @@ if kmz_file and template_file:
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        # Reverse geocoding untuk titik ini
+        # Ambil nama jalan dari titik koordinat masing-masing
         location_hp = geocode((hp["lat"], hp["lon"]), language='id')
         address_hp = location_hp.raw.get("address", {}) if location_hp else {}
-
-        postalcode = address_hp.get("postcode", "")
-        district = address_hp.get("suburb", "") or address_hp.get("village", "") or address_hp.get("hamlet", "")
-        subdistrict = address_hp.get("city_district", "") or address_hp.get("district", "")
         street_name = (
             address_hp.get("road") or
             address_hp.get("residential") or
