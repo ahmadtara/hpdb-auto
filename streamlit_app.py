@@ -1,14 +1,13 @@
 import streamlit as st
-import zipfile
 import os
-import shutil
+import zipfile
 import xml.etree.ElementTree as ET
 import pandas as pd
-from io import BytesIO
+import tempfile
+from openpyxl import load_workbook
 
-# Fungsi untuk mengekstrak KML dari KMZ
-def extract_kml_from_kmz(kmz_bytes, extract_folder):
-    with zipfile.ZipFile(kmz_bytes, 'r') as kmz:
+def extract_kml(kmz_path, extract_folder):
+    with zipfile.ZipFile(kmz_path, 'r') as kmz:
         kmz.extractall(extract_folder)
     for root, _, files in os.walk(extract_folder):
         for file in files:
@@ -16,7 +15,6 @@ def extract_kml_from_kmz(kmz_bytes, extract_folder):
                 return os.path.join(root, file)
     return None
 
-# Parsing isi file KML
 def parse_kml(kml_file):
     ns = {'kml': 'http://www.opengis.net/kml/2.2'}
     tree = ET.parse(kml_file)
@@ -38,6 +36,7 @@ def parse_kml(kml_file):
             name = name_elem.text.strip()
             coord_text = coord_elem.text.strip()
             lon, lat, *_ = coord_text.split(',')
+
             lat, lon = float(lat), float(lon)
 
             if 'FAT' in folder_name.upper():
@@ -51,65 +50,72 @@ def parse_kml(kml_file):
 
     return fat_ids, poles, homes, fdt_codes
 
-# Ekstrak nama cluster & commercial
-def extract_cluster_and_commercial(file_name):
-    title = os.path.splitext(file_name)[0]
-    parts = title.split(' - ', 1)
-    clustername = parts[0].strip() if len(parts) > 0 else ''
-    commercial_name = parts[1].strip() if len(parts) > 1 else ''
+def extract_cluster_and_commercial(kmz_filename):
+    filename = os.path.basename(kmz_filename)
+    title = os.path.splitext(filename)[0]
+    clustername = title.strip()
+    commercial_name = clustername  # Disamakan
     return clustername, commercial_name
 
-# Membentuk DataFrame
-def build_dataframe(fat_ids, poles, homes, fdt_codes, clustername, commercial_name):
+def fill_template(template_path, output_path, fat_ids, poles, homes, fdt_codes, clustername, commercial_name):
+    df_template = pd.read_excel(template_path, sheet_name="Homepass Database")
+
     max_len = max(len(fat_ids), len(poles), len(homes), len(fdt_codes))
-    rows = []
+    df_filled = df_template.copy()
+
     for i in range(max_len):
-        row = {
-            'Fat ID': fat_ids[i] if i < len(fat_ids) else '',
-            'Pole ID': poles[i][0] if i < len(poles) else '',
-            'Pole Latitude': poles[i][1] if i < len(poles) else '',
-            'Pole Longitude': poles[i][2] if i < len(poles) else '',
-            'homenumber': homes[i][0] if i < len(homes) else '',
-            'Latitude_homepass': homes[i][1] if i < len(homes) else '',
-            'Longitude_homepass': homes[i][2] if i < len(homes) else '',
-            'fdtcode': fdt_codes[i] if i < len(fdt_codes) else '',
-            'Clustername': clustername,
-            'Commercial_name': commercial_name
-        }
-        rows.append(row)
-    return pd.DataFrame(rows)
+        if i >= len(df_filled):
+            df_filled.loc[i] = None  # Tambah baris jika belum ada
 
-# Antarmuka Streamlit
-st.title("KMZ ➜ Excel | Homepass Database Generator")
-uploaded_kmz = st.file_uploader("Upload file .kmz", type=["kmz"])
+        df_filled.loc[i, 'Fat ID'] = fat_ids[i] if i < len(fat_ids) else ''
+        df_filled.loc[i, 'Pole ID'] = poles[i][0] if i < len(poles) else ''
+        df_filled.loc[i, 'Pole Latitude'] = poles[i][1] if i < len(poles) else ''
+        df_filled.loc[i, 'Pole Longitude'] = poles[i][2] if i < len(poles) else ''
+        df_filled.loc[i, 'homenumber'] = homes[i][0] if i < len(homes) else ''
+        df_filled.loc[i, 'Latitude_homepass'] = homes[i][1] if i < len(homes) else ''
+        df_filled.loc[i, 'Longitude_homepass'] = homes[i][2] if i < len(homes) else ''
+        df_filled.loc[i, 'fdtcode'] = fdt_codes[i] if i < len(fdt_codes) else ''
+        df_filled.loc[i, 'Clustername'] = clustername
+        df_filled.loc[i, 'Commercial_name'] = commercial_name
 
-if uploaded_kmz is not None:
-    with st.spinner("⏳ Memproses file..."):
-        temp_dir = 'temp_kmz_extract'
-        os.makedirs(temp_dir, exist_ok=True)
+    df_filled.to_excel(output_path, sheet_name='Homepass Database', index=False)
 
-        # Simpan file sementara
-        kmz_file_path = os.path.join(temp_dir, uploaded_kmz.name)
-        with open(kmz_file_path, "wb") as f:
-            f.write(uploaded_kmz.getbuffer())
+# === Streamlit UI ===
 
-        # Ekstrak & parsing
-        kml_file = extract_kml_from_kmz(kmz_file_path, temp_dir)
+st.title("📍 KMZ to HPDB (Template Excel) Converter")
+
+kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+template_file = st.file_uploader("Upload TEMPLATE HPDB.xlsx", type=["xlsx"])
+
+if kmz_file and template_file:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        kmz_path = os.path.join(tmpdir, kmz_file.name)
+        with open(kmz_path, 'wb') as f:
+            f.write(kmz_file.read())
+
+        template_path = os.path.join(tmpdir, template_file.name)
+        with open(template_path, 'wb') as f:
+            f.write(template_file.read())
+
+        extract_folder = os.path.join(tmpdir, 'kmz_extract')
+        os.makedirs(extract_folder, exist_ok=True)
+
+        kml_file = extract_kml(kmz_path, extract_folder)
         if not kml_file:
-            st.error("❌ Gagal mengekstrak file KML.")
+            st.error("❌ Gagal membaca KML dari KMZ")
         else:
             fat_ids, poles, homes, fdt_codes = parse_kml(kml_file)
-            clustername, commercial_name = extract_cluster_and_commercial(uploaded_kmz.name)
-            df = build_dataframe(fat_ids, poles, homes, fdt_codes, clustername, commercial_name)
+            clustername, commercial_name = extract_cluster_and_commercial(kmz_path)
 
-            st.success("✅ Data berhasil diproses.")
-            st.dataframe(df)
+            output_path = os.path.join(tmpdir, 'HPDB_Output.xlsx')
+            fill_template(template_path, output_path, fat_ids, poles, homes, fdt_codes, clustername, commercial_name)
 
-            # Export ke Excel
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name="Homepass Database")
-            st.download_button("📥 Download HPDB_Output.xlsx", data=output.getvalue(),
-                               file_name="HPDB_Output.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.success("✅ Data berhasil dimasukkan ke Template!")
 
-        shutil.rmtree(temp_dir)
+            with open(output_path, 'rb') as f:
+                st.download_button(
+                    label="⬇️ Download Excel Hasil",
+                    data=f,
+                    file_name="HPDB_Output.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
