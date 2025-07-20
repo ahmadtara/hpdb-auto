@@ -60,7 +60,7 @@ def reverse_here(lat, lon):
         comp = r.json().get("items", [{}])[0].get("address", {})
         return {
             "district": comp.get("district", "").upper(),
-            "subdistrict": comp.get("subdistrict", "").upper(),
+            "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
             "postalcode": comp.get("postalCode", "").upper(),
             "street": comp.get("street", "").upper()
         }
@@ -96,7 +96,7 @@ if kmz_file and template_file:
 
         # HP COVER street
         hh = reverse_here(h["lat"], h["lon"])
-        df.at[i,"street"] = hh["street"]
+        df.at[i,"street"] = hh["street"].upper().replace("JALAN ", "").strip()
 
         # FAT ID & Address
         mf = next((x for x in fat if fc in x["name"]), None)
