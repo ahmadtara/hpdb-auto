@@ -4,4 +4,4 @@ xlsxwriter
 lxml
 openpyxl
 geopy
-googlemaps
+requests
