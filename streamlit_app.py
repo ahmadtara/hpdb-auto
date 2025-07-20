@@ -150,7 +150,7 @@ if kmz_file and template_file:
             df.at[i, "FAT Address"] = ""
 
         progress.progress(int((i + 1) * 100 / total))
-
+    df["O4"] = len(hp)
     progress.empty()
     st.success("✅ Selesai!")
 
