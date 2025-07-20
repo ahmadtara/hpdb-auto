@@ -3,5 +3,5 @@ pandas
 xlsxwriter
 lxml
 openpyxl
-geopy
+opencage
 requests
