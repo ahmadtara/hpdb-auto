@@ -110,28 +110,29 @@ for i, h in enumerate(hp):
     df.at[i, "subdistrict"] = rc["subdistrict"]
     df.at[i, "postalcode"] = rc["postalcode"]
 
-        # HP COVER street
-        hh = reverse_here(h["lat"], h["lon"])
-        df.at[i,"street"] = hh["street"].upper().replace("JALAN ", "").strip()
+    # HP COVER street
+    hh = reverse_here(h["lat"], h["lon"])
+    df.at[i, "street"] = hh["street"].upper().replace("JALAN ", "").strip()
 
-        # FAT ID & Address
-        mf = next((x for x in fat if fc in x["name"]), None)
-        if mf:
-            df.at[i,"FAT ID"] = mf["name"]
-            df.at[i,"Pole Latitude"] = mf["lat"]
-            df.at[i,"Pole Longitude"] = mf["lon"]
-            # find pole
-            pol = next((p["name"] for p in all_poles 
-                        if abs(p["lat"]-mf["lat"])<1e-4 and abs(p["lon"]-mf["lon"])<1e-4), "POLE_NOT_FOUND")
-            df.at[i,"Pole ID"] = pol
-            fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
-            df.at[i,"FAT Address"] = fataddr
-        else:
-            df.at[i,"FAT ID"] = "FAT_NOT_FOUND"
-            df.at[i,"Pole ID"] = "POLE_NOT_FOUND"
-            df.at[i,"FAT Address"] = ""
+    # FAT ID & Address
+    mf = next((x for x in fat if fc in x["name"]), None)
+    if mf:
+        df.at[i, "FAT ID"] = mf["name"]
+        df.at[i, "Pole Latitude"] = mf["lat"]
+        df.at[i, "Pole Longitude"] = mf["lon"]
+        pol = next(
+            (p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4),
+            "POLE_NOT_FOUND"
+        )
+        df.at[i, "Pole ID"] = pol
+        fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
+        df.at[i, "FAT Address"] = fataddr
+    else:
+        df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
+        df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
+        df.at[i, "FAT Address"] = ""
 
-        progress.progress(int((i+1)*100/total))
+    progress.progress(int((i + 1) * 100 / total))
     progress.empty()
     st.success("✅ Selesai!")
 
