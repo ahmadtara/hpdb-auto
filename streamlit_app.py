@@ -3,9 +3,12 @@ import pandas as pd
 import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
-import requests
+from opencage.geocoder import OpenCageGeocode
+import time
 
-GEOCODER_API_KEY = "91b8be587a2e4eb095f24802fd462089"
+# API KEY
+key = '91b8be587a2e4eb095f24802fd462089'
+geocoder = OpenCageGeocode(key)
 
 st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
 
@@ -83,18 +86,18 @@ def find_matching_pole(fat, all_poles, tol=0.0001):
     return "POLE_NOT_FOUND"
 
 def reverse_geocode(lat, lon):
-    url = f"https://api.opencagedata.com/geocode/v1/json?q={lat}+{lon}&key={GEOCODER_API_KEY}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        if data["results"]:
-            components = data["results"][0]["components"]
+    try:
+        result = geocoder.reverse_geocode(lat, lon)
+        if result and len(result):
+            components = result[0]['components']
             return {
-                "district": (components.get("county") or components.get("city_district") or components.get("state_district") or "UNKNOWN").upper(),
-                "subdistrict": (components.get("village") or components.get("suburb") or components.get("neighbourhood") or components.get("hamlet") or "UNKNOWN").upper(),
-                "street": (components.get("road") or components.get("street") or "UNKNOWN").upper()
+                "district": components.get("suburb", "").upper(),
+                "subdistrict": components.get("city_district", "").upper(),
+                "street": components.get("road", "").upper()
             }
-    return {"district": "UNKNOWN", "subdistrict": "UNKNOWN", "street": "UNKNOWN"}
+    except:
+        pass
+    return {"district": "", "subdistrict": "", "street": ""}
 
 if kmz_file and template_file:
     kmz_name = kmz_file.name.replace(".kmz", "")
@@ -105,20 +108,21 @@ if kmz_file and template_file:
     hp_list = placemarks["HP COVER"]
     fdt_list = placemarks["FDT"]
     fdtcode = fdt_list[0]["name"] if fdt_list else "FDT_UNKNOWN"
+
+    # Ambil informasi lokasi dari titik FDT
+    if fdt_list:
+        fdt_geo = reverse_geocode(fdt_list[0]["lat"], fdt_list[0]["lon"])
+        district = fdt_geo["district"]
+        subdistrict = fdt_geo["subdistrict"]
+    else:
+        district = subdistrict = ""
+
+    # Gabungkan semua POLE
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
     row = 0
-    progress = st.progress(0, text="🔄 Memproses koordinat...")
     total = len(hp_list)
-
-    # Ambil district dan subdistrict dari HP COVER pertama
-    if hp_list:
-        first_hp = hp_list[0]
-        hp_location_global = reverse_geocode(first_hp["lat"], first_hp["lon"])
-        global_district = hp_location_global["district"]
-        global_subdistrict = hp_location_global["subdistrict"]
-    else:
-        global_district = global_subdistrict = ""
+    progress = st.progress(0, text="🔄 Memproses koordinat...")
 
     for idx, hp in enumerate(hp_list):
         if row >= len(df_template):
@@ -136,26 +140,23 @@ if kmz_file and template_file:
             df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
             df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
             df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
-
-            # Ambil street dari koordinat FAT
-            fat_location = reverse_geocode(matched_fat["lat"], matched_fat["lon"])
-            df_template.at[row, "FAT Address"] = fat_location["street"]
+            fat_address = reverse_geocode(matched_fat["lat"], matched_fat["lon"])["street"]
+            df_template.at[row, "FAT Address"] = fat_address
         else:
             df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
             df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
             df_template.at[row, "FAT Address"] = ""
 
-        # Ambil street dari titik HP COVER (per baris)
+        # Nama jalan (street) dari titik HP COVER
         hp_location = reverse_geocode(hp["lat"], hp["lon"])
         df_template.at[row, "street"] = hp_location["street"]
 
-        # district dan subdistrict diisi dari titik HP pertama (global)
-        df_template.at[row, "district"] = global_district
-        df_template.at[row, "subdistrict"] = global_subdistrict
-
+        # Kolom tetap
         df_template.at[row, "fdtcode"] = fdtcode
         df_template.at[row, "Clustername"] = kmz_name
         df_template.at[row, "Commercial_name"] = kmz_name
+        df_template.at[row, "district"] = district
+        df_template.at[row, "subdistrict"] = subdistrict
 
         row += 1
         progress.progress(int((idx + 1) / total * 100), text=f"⏳ Memproses {idx + 1}/{total}...")
