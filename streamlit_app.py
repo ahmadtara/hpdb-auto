@@ -91,11 +91,11 @@ def reverse_geocode(lat, lon):
         if data["results"]:
             components = data["results"][0]["components"]
             return {
-                "district": components.get("county", "").upper(),
-                "subdistrict": components.get("village", components.get("suburb", "")).upper(),
-                "street": components.get("road", "").upper()
+                "district": components.get("city_district", components.get("county", "UNKNOWN")).upper(),
+                "subdistrict": components.get("village", components.get("suburb", "UNKNOWN")).upper(),
+                "street": components.get("road", "UNKNOWN").upper()
             }
-    return {"district": "", "subdistrict": "", "street": ""}
+    return {"district": "UNKNOWN", "subdistrict": "UNKNOWN", "street": "UNKNOWN"}
 
 if kmz_file and template_file:
     kmz_name = kmz_file.name.replace(".kmz", "")
@@ -107,13 +107,13 @@ if kmz_file and template_file:
     fdt_list = placemarks["FDT"]
     fdtcode = fdt_list[0]["name"] if fdt_list else "FDT_UNKNOWN"
 
-    # Ambil district dan subdistrict dari FDT
+    # Ambil district dan subdistrict dari titik FDT
     if fdt_list:
         fdt_location = reverse_geocode(fdt_list[0]["lat"], fdt_list[0]["lon"])
         district = fdt_location["district"]
         subdistrict = fdt_location["subdistrict"]
     else:
-        district = subdistrict = ""
+        district = subdistrict = "UNKNOWN"
 
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
@@ -138,15 +138,14 @@ if kmz_file and template_file:
             df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
             df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
 
-            # Tambah kolom FAT Address
             fat_address = reverse_geocode(matched_fat["lat"], matched_fat["lon"])["street"]
             df_template.at[row, "FAT Address"] = fat_address
         else:
             df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
             df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
-            df_template.at[row, "FAT Address"] = ""
+            df_template.at[row, "FAT Address"] = "UNKNOWN"
 
-        # Kolom jalan/street dari titik HP
+        # Reverse geocode lokasi HP COVER
         hp_location = reverse_geocode(hp["lat"], hp["lon"])
         df_template.at[row, "street"] = hp_location["street"]
 
