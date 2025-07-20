@@ -31,8 +31,11 @@ def extract_placemarks(kmz_data):
                         pname = pm.find('kml:name', ns).text if pm.find('kml:name', ns) is not None else ""
                         coords = pm.find('.//kml:coordinates', ns)
                         if coords is not None:
-                            lon, lat, *_ = map(float, coords.text.strip().split(','))
-                            placemarks[name].append({"name": pname, "lat": lat, "lon": lon, "path": name + "\\" + pname})
+                            try:
+                                lon, lat, *_ = map(float, coords.text.strip().split(','))
+                                placemarks[name].append({"name": pname, "lat": lat, "lon": lon, "path": name + "\\" + pname})
+                            except ValueError:
+                                continue
     return placemarks
 
 def find_fat_by_fatcode(fatcode, fat_list):
@@ -85,7 +88,7 @@ if kmz_file and template_file:
 
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
-    fdt_coords = (placemarks["FDT"][0]["lat"], placemarks["FDT"][0]["lon"])
+    fdt_coords = (placemarks["FDT"][0]["lat"], placemarks["FDT"][0]["lon"]) if placemarks["FDT"] else (0, 0)
     st.info("🔄 Mengambil data lokasi District dan Subdistrict dari koordinat FDT...")
     district, subdistrict = get_location_info(fdt_coords[0], fdt_coords[1], api_key="91b8be587a2e4eb095f24802fd462089")
     time.sleep(1)
@@ -104,11 +107,17 @@ if kmz_file and template_file:
         matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
             df_template.at[row, "FAT ID"] = matched_fat["name"]
+            fat_address = matched_fat["path"]
+            street_fat = get_street_name(matched_fat["lat"], matched_fat["lon"], api_key="91b8be587a2e4eb095f24802fd462089")
+            df_template.at[row, "FAT Address"] = f"{fat_address} - {street_fat}"
             df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
             df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
             df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
         else:
             df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
+            df_template.at[row, "FAT Address"] = "NONE"
+            df_template.at[row, "Pole Latitude"] = "None"
+            df_template.at[row, "Pole Longitude"] = "None"
             df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
 
         df_template.at[row, "fdtcode"] = fdtcode
