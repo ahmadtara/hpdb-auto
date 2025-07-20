@@ -3,169 +3,122 @@ import pandas as pd
 import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
-from opencage.geocoder import OpenCageGeocode
-import time
+import requests
 
-# API KEY
-key = '91b8be587a2e4eb095f24802fd462089'
-geocoder = OpenCageGeocode(key)
+HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
 st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
-
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
 def extract_placemarks(kmz_bytes):
     def recurse_folder(folder, ns, path=""):
-        placemarks = []
+        items = []
         name_el = folder.find("kml:name", ns)
         folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
         new_path = f"{path}/{folder_name}" if path else folder_name
-
+        # subfolder
         for sub in folder.findall("kml:Folder", ns):
-            placemarks += recurse_folder(sub, ns, new_path)
-
+            items += recurse_folder(sub, ns, new_path)
+        # placemark
         for pm in folder.findall("kml:Placemark", ns):
-            name_el = pm.find("kml:name", ns)
-            coord_el = pm.find(".//kml:coordinates", ns)
-            if name_el is not None and coord_el is not None:
-                coords = coord_el.text.strip().split(",")
-                if len(coords) >= 2:
-                    placemarks.append({
-                        "name": name_el.text.strip(),
-                        "lat": float(coords[1].strip()),
-                        "lon": float(coords[0].strip()),
-                        "path": new_path
-                    })
-        return placemarks
-
+            nm = pm.find("kml:name", ns)
+            coord = pm.find(".//kml:coordinates", ns)
+            if nm is not None and coord is not None:
+                lon, lat = coord.text.strip().split(",")[:2]
+                items.append({"name": nm.text.strip(), 
+                              "lat": float(lat), 
+                              "lon": float(lon), 
+                              "path": new_path})
+        return items
     with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-        kml_file = [f for f in z.namelist() if f.endswith(".kml") or f.endswith(".KML")][0]
-        with z.open(kml_file) as f:
-            tree = ET.parse(f)
-            root = tree.getroot()
-            ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+        f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+        root = ET.parse(z.open(f)).getroot()
+        ns = {"kml": "http://www.opengis.net/kml/2.2"}
+        all_pm = []
+        for folder in root.findall(".//kml:Folder", ns):
+            all_pm += recurse_folder(folder, ns)
+        data = {k: [] for k in ["FAT","NEW POLE 7-3","EXISTING POLE EMR 7-3","EXISTING POLE EMR 7-4","FDT","HP COVER"]}
+        for p in all_pm:
+            for k in data:
+                if k in p["path"]:
+                    data[k].append(p)
+                    break
+        return data
 
-            all_placemarks = []
-            for folder in root.findall(".//kml:Folder", ns):
-                all_placemarks += recurse_folder(folder, ns)
-
-            data = {
-                "FAT": [], 
-                "NEW POLE 7-3": [], 
-                "EXISTING POLE EMR 7-3": [],
-                "EXISTING POLE EMR 7-4": [],
-                "FDT": [], 
-                "HP COVER": []
-            }
-
-            for p in all_placemarks:
-                for key in data:
-                    if key in p["path"]:
-                        data[key].append(p)
-                        break
-            return data
-
-def extract_fatcode_from_path(path):
-    parts = path.split("/")
-    for part in parts:
-        if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+def extract_fatcode(path):
+    for part in path.split("/"):
+        if len(part)==3 and part[0] in "ABCD" and part[1:].isdigit():
             return part
     return "UNKNOWN"
 
-def find_fat_by_fatcode(fatcode, fat_list):
-    for fat in fat_list:
-        if fatcode in fat["name"]:
-            return fat
-    return None
-
-def find_matching_pole(fat, all_poles, tol=0.0001):
-    for pole in all_poles:
-        if abs(fat["lat"] - pole["lat"]) < tol and abs(fat["lon"] - pole["lon"]) < tol:
-            return pole["name"]
-    return "POLE_NOT_FOUND"
-
-def reverse_geocode(lat, lon):
-    try:
-        result = geocoder.reverse_geocode(lat, lon)
-        if result and len(result):
-            components = result[0]['components']
-            return {
-                "district": components.get("suburb", "").upper(),
-                "subdistrict": components.get("city_district", "").upper(),
-                "street": components.get("road", "").upper()
-            }
-    except:
-        pass
-    return {"district": "", "subdistrict": "", "street": ""}
+def reverse_here(lat, lon):
+    url = (f"https://revgeocode.search.hereapi.com/v1/revgeocode"
+           f"?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US")
+    r = requests.get(url)
+    if r.status_code==200:
+        comp = r.json().get("items", [{}])[0].get("address", {})
+        return {
+            "district": comp.get("district", "").upper(),
+            "subdistrict": comp.get("subdistrict", "").upper(),
+            "postalcode": comp.get("postalCode", "").upper(),
+            "street": comp.get("street", "").upper()
+        }
+    return {"district":"", "subdistrict":"", "postalcode":"", "street":""}
 
 if kmz_file and template_file:
-    kmz_name = kmz_file.name.replace(".kmz", "")
     placemarks = extract_placemarks(kmz_file.read())
-    df_template = pd.read_excel(template_file)
-
-    fat_list = placemarks["FAT"]
-    hp_list = placemarks["HP COVER"]
-    fdt_list = placemarks["FDT"]
-    fdtcode = fdt_list[0]["name"] if fdt_list else "FDT_UNKNOWN"
-
-    # Ambil informasi lokasi dari titik FDT
-    if fdt_list:
-        fdt_geo = reverse_geocode(fdt_list[0]["lat"], fdt_list[0]["lon"])
-        district = fdt_geo["district"]
-        subdistrict = fdt_geo["subdistrict"]
-    else:
-        district = subdistrict = ""
-
-    # Gabungkan semua POLE
+    df = pd.read_excel(template_file)
+    fat = placemarks["FAT"]
+    hp = placemarks["HP COVER"]
+    fdt = placemarks["FDT"]
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
-    row = 0
-    total = len(hp_list)
-    progress = st.progress(0, text="🔄 Memproses koordinat...")
+    # FDT info once, applied ke semua
+    if fdt:
+        rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"])
+    else:
+        rc = {"district":"","subdistrict":"","postalcode":"","street":""}
 
-    for idx, hp in enumerate(hp_list):
-        if row >= len(df_template):
-            break
+    progress = st.progress(0)
+    total = len(hp)
 
-        fatcode = extract_fatcode_from_path(hp["path"])
-        df_template.at[row, "fatcode"] = fatcode
-        df_template.at[row, "homenumber"] = hp["name"]
-        df_template.at[row, "Latitude_homepass"] = hp["lat"]
-        df_template.at[row, "Longitude_homepass"] = hp["lon"]
+    for i, h in enumerate(hp):
+        if i>=len(df): break
+        fc = extract_fatcode(h["path"])
+        df.at[i,"fatcode"] = fc
+        df.at[i,"homenumber"] = h["name"]
+        df.at[i,"Latitude_homepass"] = h["lat"]
+        df.at[i,"Longitude_homepass"] = h["lon"]
+        df.at[i,"district"] = rc["district"]
+        df.at[i,"subdistrict"] = rc["subdistrict"]
+        df.at[i,"postalcode"] = rc["postalcode"]
 
-        matched_fat = find_fat_by_fatcode(fatcode, fat_list)
-        if matched_fat:
-            df_template.at[row, "FAT ID"] = matched_fat["name"]
-            df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
-            df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
-            df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
-            fat_address = reverse_geocode(matched_fat["lat"], matched_fat["lon"])["street"]
-            df_template.at[row, "FAT Address"] = fat_address
+        # HP COVER street
+        hh = reverse_here(h["lat"], h["lon"])
+        df.at[i,"street"] = hh["street"]
+
+        # FAT ID & Address
+        mf = next((x for x in fat if fc in x["name"]), None)
+        if mf:
+            df.at[i,"FAT ID"] = mf["name"]
+            df.at[i,"Pole Latitude"] = mf["lat"]
+            df.at[i,"Pole Longitude"] = mf["lon"]
+            # find pole
+            pol = next((p["name"] for p in all_poles 
+                        if abs(p["lat"]-mf["lat"])<1e-4 and abs(p["lon"]-mf["lon"])<1e-4), "POLE_NOT_FOUND")
+            df.at[i,"Pole ID"] = pol
+            fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
+            df.at[i,"FAT Address"] = fataddr
         else:
-            df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
-            df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
-            df_template.at[row, "FAT Address"] = ""
+            df.at[i,"FAT ID"] = "FAT_NOT_FOUND"
+            df.at[i,"Pole ID"] = "POLE_NOT_FOUND"
+            df.at[i,"FAT Address"] = ""
 
-        # Nama jalan (street) dari titik HP COVER
-        hp_location = reverse_geocode(hp["lat"], hp["lon"])
-        df_template.at[row, "street"] = hp_location["street"]
-
-        # Kolom tetap
-        df_template.at[row, "fdtcode"] = fdtcode
-        df_template.at[row, "Clustername"] = kmz_name
-        df_template.at[row, "Commercial_name"] = kmz_name
-        df_template.at[row, "district"] = district
-        df_template.at[row, "subdistrict"] = subdistrict
-
-        row += 1
-        progress.progress(int((idx + 1) / total * 100), text=f"⏳ Memproses {idx + 1}/{total}...")
-
+        progress.progress(int((i+1)*100/total))
     progress.empty()
-    st.success("✅ Semua data berhasil diproses!")
+    st.success("✅ Selesai!")
 
-    st.dataframe(df_template.head(10))
-
-    output = BytesIO()
-    df_template.to_excel(output, index=False)
-    st.download_button("📥 Download File Hasil", output.getvalue(), file_name="HASIL_HPDB_LENGKAP.xlsx")
+    st.dataframe(df.head(10))
+    buf = BytesIO(); df.to_excel(buf, index=False)
+    st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
