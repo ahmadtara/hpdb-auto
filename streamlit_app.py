@@ -5,12 +5,33 @@ import xml.etree.ElementTree as ET
 from io import BytesIO
 import requests
 
+# --- HERE API Key ---
 HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
-st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
-kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
-template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
+# --- Login Page ---
+def login_page():
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image(
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/"
+            "MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/"
+            "960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png",
+            use_column_width=True
+        )
 
+    st.markdown("### 🔐 Login to MyRepublic Auto HPDB")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username == "snd" and password == "snd0220":
+            st.session_state["logged_in"] = True
+            st.success("Login berhasil! 🎉")
+            st.experimental_rerun()
+        else:
+            st.error("Username atau password salah.")
+
+# --- Extract KMZ Data ---
 def extract_placemarks(kmz_bytes):
     def recurse_folder(folder, ns, path=""):
         items = []
@@ -47,12 +68,14 @@ def extract_placemarks(kmz_bytes):
                     break
         return data
 
+# --- Extract FAT Code from Folder Name ---
 def extract_fatcode(path):
     for part in path.split("/"):
         if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
             return part
     return "UNKNOWN"
 
+# --- Reverse Geocoding from HERE ---
 def reverse_here(lat, lon):
     url = (
         f"https://revgeocode.search.hereapi.com/v1/revgeocode"
@@ -69,26 +92,31 @@ def reverse_here(lat, lon):
         }
     return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-if kmz_file and template_file:
-    kmz_bytes = kmz_file.read()
-    placemarks = extract_placemarks(kmz_bytes)
-    df = pd.read_excel(template_file)
-    fat = placemarks["FAT"]
-    hp = placemarks["HP COVER"]
-    fdt = placemarks["FDT"]
-    all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
+# --- Main App ---
+def main_app():
+    st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
+    kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+    template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-    if fdt:
-        rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"])
-    else:
-        rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+    if kmz_file and template_file:
+        kmz_bytes = kmz_file.read()
+        placemarks = extract_placemarks(kmz_bytes)
+        df = pd.read_excel(template_file)
 
-    fdtcode = "UNKNOWN"
-    oltcode = "UNKNOWN"
+        fat = placemarks["FAT"]
+        hp = placemarks["HP COVER"]
+        fdt = placemarks["FDT"]
+        all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
-    if fdt:
-        fdtcode = fdt[0]["name"].strip().upper()
+        if fdt:
+            rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"])
+        else:
+            rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
+        fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
+        oltcode = "UNKNOWN"
+
+        # Get OLT from description
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
             f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
             tree = ET.parse(z.open(f))
@@ -102,59 +130,67 @@ if kmz_file and template_file:
                         oltcode = desc_el.text.strip().upper()
                     break
 
-    progress = st.progress(0)
-    total = len(hp)
+        progress = st.progress(0)
+        total = len(hp)
 
-    for col in ["block", "homenumber", "fdtcode", "oltcode"]:
-        if col not in df.columns:
-            df[col] = ""
+        for col in ["block", "homenumber", "fdtcode", "oltcode"]:
+            if col not in df.columns:
+                df[col] = ""
 
-    for i, h in enumerate(hp):
-        if i >= len(df):
-            break
+        for i, h in enumerate(hp):
+            if i >= len(df):
+                break
 
-        fc = extract_fatcode(h["path"])
-        df.at[i, "fatcode"] = fc
+            fc = extract_fatcode(h["path"])
+            df.at[i, "fatcode"] = fc
 
-        name_parts = h["name"].split(".")
-        if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
-            df.at[i, "block"] = name_parts[0].strip().upper()
-            df.at[i, "homenumber"] = name_parts[1].strip()
-        else:
-            df.at[i, "block"] = ""
-            df.at[i, "homenumber"] = h["name"]
+            name_parts = h["name"].split(".")
+            if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
+                df.at[i, "block"] = name_parts[0].strip().upper()
+                df.at[i, "homenumber"] = name_parts[1].strip()
+            else:
+                df.at[i, "block"] = ""
+                df.at[i, "homenumber"] = h["name"]
 
-        df.at[i, "Latitude_homepass"] = h["lat"]
-        df.at[i, "Longitude_homepass"] = h["lon"]
-        df.at[i, "district"] = rc["district"]
-        df.at[i, "subdistrict"] = rc["subdistrict"]
-        df.at[i, "postalcode"] = rc["postalcode"]
-        df.at[i, "fdtcode"] = fdtcode
-        df.at[i, "oltcode"] = oltcode
+            df.at[i, "Latitude_homepass"] = h["lat"]
+            df.at[i, "Longitude_homepass"] = h["lon"]
+            df.at[i, "district"] = rc["district"]
+            df.at[i, "subdistrict"] = rc["subdistrict"]
+            df.at[i, "postalcode"] = rc["postalcode"]
+            df.at[i, "fdtcode"] = fdtcode
+            df.at[i, "oltcode"] = oltcode
 
-        hh = reverse_here(h["lat"], h["lon"])
-        df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
+            hh = reverse_here(h["lat"], h["lon"])
+            df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
-        mf = next((x for x in fat if fc in x["name"]), None)
-        if mf:
-            df.at[i, "FAT ID"] = mf["name"]
-            df.at[i, "Pole Latitude"] = mf["lat"]
-            df.at[i, "Pole Longitude"] = mf["lon"]
-            pol = next((p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4), "POLE_NOT_FOUND")
-            df.at[i, "Pole ID"] = pol
-            fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
-            df.at[i, "FAT Address"] = fataddr
-        else:
-            df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
-            df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
-            df.at[i, "FAT Address"] = ""
+            mf = next((x for x in fat if fc in x["name"]), None)
+            if mf:
+                df.at[i, "FAT ID"] = mf["name"]
+                df.at[i, "Pole Latitude"] = mf["lat"]
+                df.at[i, "Pole Longitude"] = mf["lon"]
+                pol = next((p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4), "POLE_NOT_FOUND")
+                df.at[i, "Pole ID"] = pol
+                fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
+                df.at[i, "FAT Address"] = fataddr
+            else:
+                df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
+                df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
+                df.at[i, "FAT Address"] = ""
 
-        progress.progress(int((i + 1) * 100 / total))
+            progress.progress(int((i + 1) * 100 / total))
 
-    progress.empty()
-    st.success("✅ Selesai!")
+        progress.empty()
+        st.success("✅ Selesai!")
+        st.dataframe(df.head(10))
+        buf = BytesIO()
+        df.to_excel(buf, index=False)
+        st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
 
-    st.dataframe(df.head(10))
-    buf = BytesIO()
-    df.to_excel(buf, index=False)
-    st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+# --- Run App with Session ---
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+if st.session_state["logged_in"]:
+    main_app()
+else:
+    login_page()
