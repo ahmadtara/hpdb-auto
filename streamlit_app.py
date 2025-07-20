@@ -5,27 +5,42 @@ import xml.etree.ElementTree as ET
 from io import BytesIO
 import requests
 
+# API Key HERE
 HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
+
+# Login users
+valid_users = {
+    "snd": "snd0220",
+    "obi": "obi",
+    "tara": "123"
+}
 
 # ---------------- LOGIN PAGE ---------------- #
 def login_page():
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png", width=300)
-    st.markdown("## 🔐 Login to MyRepublic Auto HPDB")
+    st.markdown("## 🔐 Login to MyRepublic Auto HPDB Auto-Pilot⚡By.A.Tara-P.")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username == "snd" and password == "snd0220":
+        if username in valid_users and password == valid_users[username]:
             st.session_state["logged_in"] = True
-            st.success("Login berhasil! 🎉")
+            st.session_state["user"] = username
+            st.success(f"Login berhasil! 🎉 Selamat datang, {username}.")
             st.rerun()
         else:
-            st.error("Username atau Password salah!")
+            st.error("❌ Username atau Password salah!")
 
 # ---------------- MAIN PAGE ---------------- #
 def main_page():
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
+    st.write(f"Hai, **{st.session_state['user']}** 👋")
+    
+    if st.button("🔒 Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
+        st.rerun()
 
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
@@ -99,12 +114,10 @@ def main_page():
         else:
             rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-        fdtcode = "UNKNOWN"
+        fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
         oltcode = "UNKNOWN"
 
         if fdt:
-            fdtcode = fdt[0]["name"].strip().upper()
-
             with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
                 f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
                 tree = ET.parse(z.open(f))
@@ -178,6 +191,7 @@ def main_page():
 # ---------------- ROUTER ---------------- #
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+    st.session_state["user"] = None
 
 if not st.session_state["logged_in"]:
     login_page()
