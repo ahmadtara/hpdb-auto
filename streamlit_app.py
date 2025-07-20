@@ -5,21 +5,13 @@ import xml.etree.ElementTree as ET
 from io import BytesIO
 import requests
 
-# --- HERE API Key ---
 HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
-# --- Login Page ---
+# ---------------- LOGIN PAGE ---------------- #
 def login_page():
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.image(
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/"
-            "MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/"
-            "960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png",
-            use_column_width=True
-        )
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png", width=300)
+    st.markdown("## 🔐 Login to MyRepublic Auto HPDB")
 
-    st.markdown("### 🔐 Login to MyRepublic Auto HPDB")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
@@ -27,82 +19,76 @@ def login_page():
         if username == "snd" and password == "snd0220":
             st.session_state["logged_in"] = True
             st.success("Login berhasil! 🎉")
-            st.experimental_rerun()
+            st.rerun()
         else:
-            st.error("Username atau password salah.")
+            st.error("Username atau Password salah!")
 
-# --- Extract KMZ Data ---
-def extract_placemarks(kmz_bytes):
-    def recurse_folder(folder, ns, path=""):
-        items = []
-        name_el = folder.find("kml:name", ns)
-        folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
-        new_path = f"{path}/{folder_name}" if path else folder_name
-        for sub in folder.findall("kml:Folder", ns):
-            items += recurse_folder(sub, ns, new_path)
-        for pm in folder.findall("kml:Placemark", ns):
-            nm = pm.find("kml:name", ns)
-            coord = pm.find(".//kml:coordinates", ns)
-            if nm is not None and coord is not None:
-                lon, lat = coord.text.strip().split(",")[:2]
-                items.append({
-                    "name": nm.text.strip(),
-                    "lat": float(lat),
-                    "lon": float(lon),
-                    "path": new_path
-                })
-        return items
-
-    with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-        f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-        root = ET.parse(z.open(f)).getroot()
-        ns = {"kml": "http://www.opengis.net/kml/2.2"}
-        all_pm = []
-        for folder in root.findall(".//kml:Folder", ns):
-            all_pm += recurse_folder(folder, ns)
-        data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
-        for p in all_pm:
-            for k in data:
-                if k in p["path"]:
-                    data[k].append(p)
-                    break
-        return data
-
-# --- Extract FAT Code from Folder Name ---
-def extract_fatcode(path):
-    for part in path.split("/"):
-        if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
-            return part
-    return "UNKNOWN"
-
-# --- Reverse Geocoding from HERE ---
-def reverse_here(lat, lon):
-    url = (
-        f"https://revgeocode.search.hereapi.com/v1/revgeocode"
-        f"?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
-    )
-    r = requests.get(url)
-    if r.status_code == 200:
-        comp = r.json().get("items", [{}])[0].get("address", {})
-        return {
-            "district": comp.get("district", "").upper(),
-            "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
-            "postalcode": comp.get("postalCode", "").upper(),
-            "street": comp.get("street", "").upper()
-        }
-    return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
-
-# --- Main App ---
-def main_app():
+# ---------------- MAIN PAGE ---------------- #
+def main_page():
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
+
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
+
+    def extract_placemarks(kmz_bytes):
+        def recurse_folder(folder, ns, path=""):
+            items = []
+            name_el = folder.find("kml:name", ns)
+            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
+            new_path = f"{path}/{folder_name}" if path else folder_name
+            for sub in folder.findall("kml:Folder", ns):
+                items += recurse_folder(sub, ns, new_path)
+            for pm in folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                coord = pm.find(".//kml:coordinates", ns)
+                if nm is not None and coord is not None:
+                    lon, lat = coord.text.strip().split(",")[:2]
+                    items.append({
+                        "name": nm.text.strip(),
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "path": new_path
+                    })
+            return items
+
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+            root = ET.parse(z.open(f)).getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+            all_pm = []
+            for folder in root.findall(".//kml:Folder", ns):
+                all_pm += recurse_folder(folder, ns)
+            data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
+            for p in all_pm:
+                for k in data:
+                    if k in p["path"]:
+                        data[k].append(p)
+                        break
+            return data
+
+    def extract_fatcode(path):
+        for part in path.split("/"):
+            if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+                return part
+        return "UNKNOWN"
+
+    def reverse_here(lat, lon):
+        url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
+        r = requests.get(url)
+        if r.status_code == 200:
+            comp = r.json().get("items", [{}])[0].get("address", {})
+            return {
+                "district": comp.get("district", "").upper(),
+                "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
+                "postalcode": comp.get("postalCode", "").upper(),
+                "street": comp.get("street", "").upper()
+            }
+        return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
         df = pd.read_excel(template_file)
-
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
@@ -113,22 +99,24 @@ def main_app():
         else:
             rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-        fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
+        fdtcode = "UNKNOWN"
         oltcode = "UNKNOWN"
 
-        # Get OLT from description
-        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-            tree = ET.parse(z.open(f))
-            root = tree.getroot()
-            ns = {"kml": "http://www.opengis.net/kml/2.2"}
-            for pm in root.findall(".//kml:Placemark", ns):
-                name_el = pm.find("kml:name", ns)
-                desc_el = pm.find("kml:description", ns)
-                if name_el is not None and name_el.text.strip().upper() == fdtcode:
-                    if desc_el is not None:
-                        oltcode = desc_el.text.strip().upper()
-                    break
+        if fdt:
+            fdtcode = fdt[0]["name"].strip().upper()
+
+            with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+                f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+                tree = ET.parse(z.open(f))
+                root = tree.getroot()
+                ns = {"kml": "http://www.opengis.net/kml/2.2"}
+                for pm in root.findall(".//kml:Placemark", ns):
+                    name_el = pm.find("kml:name", ns)
+                    desc_el = pm.find("kml:description", ns)
+                    if name_el is not None and name_el.text.strip().upper() == fdtcode:
+                        if desc_el is not None:
+                            oltcode = desc_el.text.strip().upper()
+                        break
 
         progress = st.progress(0)
         total = len(hp)
@@ -181,16 +169,17 @@ def main_app():
 
         progress.empty()
         st.success("✅ Selesai!")
+
         st.dataframe(df.head(10))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
 
-# --- Run App with Session ---
+# ---------------- ROUTER ---------------- #
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 
-if st.session_state["logged_in"]:
-    main_app()
-else:
+if not st.session_state["logged_in"]:
     login_page()
+else:
+    main_page()
