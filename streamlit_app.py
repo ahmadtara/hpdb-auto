@@ -4,7 +4,6 @@ import zipfile
 import xml.etree.ElementTree as ET
 from io import BytesIO
 import requests
-from openpyxl import load_workbook
 
 HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
@@ -73,6 +72,7 @@ def reverse_here(lat, lon):
 if kmz_file and template_file:
     kmz_bytes = kmz_file.read()
     placemarks = extract_placemarks(kmz_bytes)
+    df = pd.read_excel(template_file)
     fat = placemarks["FAT"]
     hp = placemarks["HP COVER"]
     fdt = placemarks["FDT"]
@@ -102,7 +102,6 @@ if kmz_file and template_file:
                         oltcode = desc_el.text.strip().upper()
                     break
 
-    df = pd.read_excel(template_file)
     progress = st.progress(0)
     total = len(hp)
 
@@ -151,21 +150,11 @@ if kmz_file and template_file:
             df.at[i, "FAT Address"] = ""
 
         progress.progress(int((i + 1) * 100 / total))
-    
+
     progress.empty()
     st.success("✅ Selesai!")
 
     st.dataframe(df.head(10))
-
-    # Update nilai O5 di template asli
-    template_bytes = template_file.read()
-    wb = load_workbook(BytesIO(template_bytes))
-    ws = wb.active
-    ws["O4"] = len(hp)
-
-    # Simpan workbook hasil
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-
-    st.download_button("📥 Download Hasil", output.getvalue(), file_name="hasil_hpdb.xlsx")
+    buf = BytesIO()
+    df.to_excel(buf, index=False)
+    st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
