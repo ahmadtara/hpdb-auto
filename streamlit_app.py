@@ -70,33 +70,51 @@ def reverse_here(lat, lon):
     return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
 if kmz_file and template_file:
-    placemarks = extract_placemarks(kmz_file.read())
+    kmz_bytes = kmz_file.read()
+    placemarks = extract_placemarks(kmz_bytes)
     df = pd.read_excel(template_file)
     fat = placemarks["FAT"]
     hp = placemarks["HP COVER"]
     fdt = placemarks["FDT"]
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
+    # Ambil informasi FDT umum
     if fdt:
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"])
     else:
         rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
+    # Ambil FDT code dari path folder dan OLT code dari description
+    fdtcode = "UNKNOWN_FDT"
+    oltcode = "UNKNOWN_OLT"
+    if fdt:
+        fdtcode = extract_fatcode(fdt[0]["path"])
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+            tree = ET.parse(z.open(f))
+            root = tree.getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+            for pm in root.findall(".//kml:Placemark", ns):
+                name_el = pm.find("kml:name", ns)
+                desc_el = pm.find("kml:description", ns)
+                if name_el is not None and desc_el is not None and name_el.text.strip() == fdt[0]["name"]:
+                    oltcode = desc_el.text.strip().upper()
+                    break
+
     progress = st.progress(0)
     total = len(hp)
 
-    # Pastikan kolom 'block' dan 'homenumber' ada di template
-    for col in ["block", "homenumber"]:
+    for col in ["block", "homenumber", "fdtcode", "oltcode"]:
         if col not in df.columns:
             df[col] = ""
 
     for i, h in enumerate(hp):
         if i >= len(df):
             break
+
         fc = extract_fatcode(h["path"])
         df.at[i, "fatcode"] = fc
 
-        # Tambahan logika parsing blok & homenumber
         name_parts = h["name"].split(".")
         if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
             df.at[i, "block"] = name_parts[0].strip().upper()
@@ -110,12 +128,12 @@ if kmz_file and template_file:
         df.at[i, "district"] = rc["district"]
         df.at[i, "subdistrict"] = rc["subdistrict"]
         df.at[i, "postalcode"] = rc["postalcode"]
+        df.at[i, "fdtcode"] = fdtcode
+        df.at[i, "oltcode"] = oltcode
 
-        # HP COVER street
         hh = reverse_here(h["lat"], h["lon"])
         df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
-        # FAT ID & Address
         mf = next((x for x in fat if fc in x["name"]), None)
         if mf:
             df.at[i, "FAT ID"] = mf["name"]
