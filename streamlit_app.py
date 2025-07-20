@@ -1,100 +1,230 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import os
-from user_agents import parse as parse_ua
+import zipfile
+import xml.etree.ElementTree as ET
+from io import BytesIO
+import requests
+import threading
 
-# --- Konfigurasi ---
-st.set_page_config(page_title="MyRepublic HPDB", page_icon="🛜", layout="centered")
+# Telegram Bot Token & Chat ID
+TELEGRAM_TOKEN = "7885701086:AAEgXt9fN7qufBbsf0NGBDvhtj3IqzohvKw"
+TELEGRAM_CHAT_ID = "6122753506"
+BOT_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png"
-LOG_FILE = "login_logs.csv"
+# HERE API Key
+HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
-# --- Data Login ---
-USER_CREDENTIALS = {
+# Login users
+valid_users = {
     "snd": "snd0220",
     "obi": "obi",
-    "tara": "123",
-    "admin": "admin123"
+    "tara": "123"
 }
 
-# --- Fungsi Simpan Log ---
-def log_login(username, user_agent):
-    device_type = detect_device(user_agent)
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# Blokir user
+blocked_users = set()
 
-    new_row = pd.DataFrame([{
-        "username": username,
-        "timestamp": now,
-        "device": device_type
-    }])
+# Fungsi kirim pesan Telegram
+def send_telegram(message):
+    try:
+        requests.post(f"{BOT_API_URL}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+    except:
+        pass
 
-    if os.path.exists(LOG_FILE):
-        df = pd.read_csv(LOG_FILE)
-        df = pd.concat([df, new_row], ignore_index=True)
-    else:
-        df = new_row
+# Monitor perintah Telegram
+def monitor_telegram():
+    offset = None
+    while True:
+        try:
+            resp = requests.get(f"{BOT_API_URL}/getUpdates", params={"timeout": 10, "offset": offset})
+            data = resp.json()
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message", {}).get("text", "")
+                if msg.startswith("/add "):
+                    _, uname, pw = msg.strip().split(maxsplit=2)
+                    valid_users[uname] = pw
+                    send_telegram(f"Akun '{uname}' berhasil ditambahkan.")
+                elif msg.startswith("/block "):
+                    uname = msg.strip().split()[1]
+                    blocked_users.add(uname)
+                    send_telegram(f"Akun '{uname}' berhasil diblokir.")
+        except:
+            continue
 
-    df.to_csv(LOG_FILE, index=False)
+# Jalankan pemantauan Telegram
+threading.Thread(target=monitor_telegram, daemon=True).start()
 
-# --- Fungsi Deteksi Device ---
-def detect_device(user_agent_string):
-    ua = parse_ua(user_agent_string)
-    if ua.is_mobile:
-        return "Mobile"
-    elif ua.is_tablet:
-        return "Tablet"
-    elif ua.is_pc:
-        return "Desktop"
-    else:
-        return "Unknown"
-
-# --- Halaman Login ---
+# ---------------- LOGIN PAGE ---------------- #
 def login_page():
-    st.image(LOGO_URL, use_column_width=True)
-    st.markdown("### 🔐 Login to MyRepublic Auto HPDB")
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png", width=300)
+    st.markdown("## 🔐 Login to MyRepublic Auto HPDB Auto-Pilot⚡By.A.Tara-P.")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username in USER_CREDENTIALS and password == USER_CREDENTIALS[username]:
-            st.success(f"Login berhasil! 🎉 {'Selamat datang, admin' if username == 'admin' else ''}")
-            st.session_state.logged_in = True
-            st.session_state.username = username
-
-            user_agent = st.request_headers.get("User-Agent", "unknown")
-            log_login(username, user_agent)
-
+        if username in blocked_users:
+            st.error("⛔ Akun ini telah diblokir.")
+        elif username in valid_users and password == valid_users[username]:
+            st.session_state["logged_in"] = True
+            st.session_state["user"] = username
+            st.success(f"Login berhasil! 🎉 Selamat datang, {username}.")
+            send_telegram(f"✅ Login berhasil: {username}")
             st.rerun()
         else:
-            st.error("Username atau password salah!")
+            st.error("❌ Username atau Password salah!")
 
-# --- Halaman Admin ---
-def admin_dashboard():
-    st.title("📊 Admin Dashboard - Login Tracker")
-
-    if os.path.exists(LOG_FILE):
-        df = pd.read_csv(LOG_FILE)
-        st.dataframe(df)
-
-        st.markdown("### 📈 Ringkasan")
-        st.write(df.groupby(["username", "device"]).size().unstack(fill_value=0))
-    else:
-        st.info("Belum ada data login yang tercatat.")
-
-# --- Halaman Utama Setelah Login ---
+# ---------------- MAIN PAGE ---------------- #
 def main_page():
-    username = st.session_state.username
-    if username == "admin":
-        admin_dashboard()
-    else:
-        st.title("📍 HPDB Converter")
-        st.info(f"Hai {username}, fitur utama belum ditambahkan di sini.")
-        st.write("🔧 Anda dapat menambahkan fitur KMZ ➜ HPDB di sini.")
+    st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
+    st.write(f"Hai, **{st.session_state['user']}** 👋")
 
-# --- Routing ---
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
+    if st.button("🔒 Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
+        st.rerun()
+
+    kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+    template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
+
+    def extract_placemarks(kmz_bytes):
+        def recurse_folder(folder, ns, path=""):
+            items = []
+            name_el = folder.find("kml:name", ns)
+            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
+            new_path = f"{path}/{folder_name}" if path else folder_name
+            for sub in folder.findall("kml:Folder", ns):
+                items += recurse_folder(sub, ns, new_path)
+            for pm in folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                coord = pm.find(".//kml:coordinates", ns)
+                if nm is not None and coord is not None:
+                    lon, lat = coord.text.strip().split(",")[:2]
+                    items.append({
+                        "name": nm.text.strip(),
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "path": new_path
+                    })
+            return items
+
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+            root = ET.parse(z.open(f)).getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+            all_pm = []
+            for folder in root.findall(".//kml:Folder", ns):
+                all_pm += recurse_folder(folder, ns)
+            data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
+            for p in all_pm:
+                for k in data:
+                    if k in p["path"]:
+                        data[k].append(p)
+                        break
+            return data
+
+    def extract_fatcode(path):
+        for part in path.split("/"):
+            if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+                return part
+        return "UNKNOWN"
+
+    def reverse_here(lat, lon):
+        url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
+        r = requests.get(url)
+        if r.status_code == 200:
+            comp = r.json().get("items", [{}])[0].get("address", {})
+            return {
+                "district": comp.get("district", "").upper(),
+                "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
+                "postalcode": comp.get("postalCode", "").upper(),
+                "street": comp.get("street", "").upper()
+            }
+        return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+
+    if kmz_file and template_file:
+        kmz_bytes = kmz_file.read()
+        placemarks = extract_placemarks(kmz_bytes)
+        df = pd.read_excel(template_file)
+        fat = placemarks["FAT"]
+        hp = placemarks["HP COVER"]
+        fdt = placemarks["FDT"]
+        all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
+
+        rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+        fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
+        oltcode = "UNKNOWN"
+
+        if fdt:
+            with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+                f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+                tree = ET.parse(z.open(f))
+                root = tree.getroot()
+                ns = {"kml": "http://www.opengis.net/kml/2.2"}
+                for pm in root.findall(".//kml:Placemark", ns):
+                    name_el = pm.find("kml:name", ns)
+                    desc_el = pm.find("kml:description", ns)
+                    if name_el is not None and name_el.text.strip().upper() == fdtcode:
+                        if desc_el is not None:
+                            oltcode = desc_el.text.strip().upper()
+                        break
+
+        progress = st.progress(0)
+        total = len(hp)
+
+        for col in ["block", "homenumber", "fdtcode", "oltcode"]:
+            if col not in df.columns:
+                df[col] = ""
+
+        for i, h in enumerate(hp):
+            if i >= len(df): break
+            fc = extract_fatcode(h["path"])
+            df.at[i, "fatcode"] = fc
+            name_parts = h["name"].split(".")
+            if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
+                df.at[i, "block"] = name_parts[0].strip().upper()
+                df.at[i, "homenumber"] = name_parts[1].strip()
+            else:
+                df.at[i, "block"] = ""
+                df.at[i, "homenumber"] = h["name"]
+            df.at[i, "Latitude_homepass"] = h["lat"]
+            df.at[i, "Longitude_homepass"] = h["lon"]
+            df.at[i, "district"] = rc["district"]
+            df.at[i, "subdistrict"] = rc["subdistrict"]
+            df.at[i, "postalcode"] = rc["postalcode"]
+            df.at[i, "fdtcode"] = fdtcode
+            df.at[i, "oltcode"] = oltcode
+            hh = reverse_here(h["lat"], h["lon"])
+            df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
+            mf = next((x for x in fat if fc in x["name"]), None)
+            if mf:
+                df.at[i, "FAT ID"] = mf["name"]
+                df.at[i, "Pole Latitude"] = mf["lat"]
+                df.at[i, "Pole Longitude"] = mf["lon"]
+                pol = next((p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4), "POLE_NOT_FOUND")
+                df.at[i, "Pole ID"] = pol
+                fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
+                df.at[i, "FAT Address"] = fataddr
+            else:
+                df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
+                df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
+                df.at[i, "FAT Address"] = ""
+            progress.progress(int((i + 1) * 100 / total))
+
+        progress.empty()
+        st.success("✅ Selesai!")
+        st.dataframe(df.head(10))
+        buf = BytesIO()
+        df.to_excel(buf, index=False)
+        st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
+# ---------------- ROUTER ---------------- #
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["user"] = None
+
+if not st.session_state["logged_in"]:
     login_page()
 else:
     main_page()
