@@ -5,32 +5,33 @@ import xml.etree.ElementTree as ET
 from io import BytesIO
 import requests
 
-st.title("📍 KMZ ➜ HPDB (Auto-Fill dengan Alamat)")
+st.title("📍 KMZ ➜ HPDB (Auto-Fill dengan OpenCage)")
 
-API_KEY = "pk.d81f836c8553f0bbe644b34e38bf6de1"
+API_KEY = "91b8be587a2e4eb095f24802fd462089"
 
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-def reverse_geocode(lat, lon):
-    """Ambil street, district, subdistrict, postalcode dari LocationIQ"""
-    url = f"https://us1.locationiq.com/v1/reverse.php?key={API_KEY}&lat={lat}&lon={lon}&format=json"
+# Fungsi ambil alamat dari OpenCage API
+def reverse_geocode_opencage(lat, lon):
+    url = f"https://api.opencagedata.com/geocode/v1/json?q={lat}+{lon}&key={API_KEY}&language=id&pretty=1"
     try:
         r = requests.get(url)
         if r.status_code == 200:
             data = r.json()
-            address = data.get("address", {})
-            return {
-                "street": address.get("road", "").upper(),
-                "district": address.get("suburb", "").upper() or address.get("village", "").upper(),
-                "subdistrict": address.get("city_district", "").upper() or address.get("county", "").upper(),
-                "postalcode": address.get("postcode", "")
-            }
-        else:
-            return {"street": "", "district": "", "subdistrict": "", "postalcode": ""}
+            if data["results"]:
+                components = data["results"][0]["components"]
+                return {
+                    "street": components.get("road", "").upper(),
+                    "district": components.get("suburb", components.get("village", "")).upper(),
+                    "subdistrict": components.get("city_district", components.get("county", "")).upper(),
+                    "postalcode": components.get("postcode", "")
+                }
+        return {"street": "", "district": "", "subdistrict": "", "postalcode": ""}
     except:
         return {"street": "", "district": "", "subdistrict": "", "postalcode": ""}
 
+# Ekstrak koordinat dari KMZ
 def extract_placemarks(kmz_bytes):
     def recurse_folder(folder, ns, path=""):
         placemarks = []
@@ -101,6 +102,7 @@ def find_matching_pole(fat, all_poles, tol=0.0001):
             return pole["name"]
     return "POLE_NOT_FOUND"
 
+# Proses utama
 if kmz_file and template_file:
     kmz_name = kmz_file.name.replace(".kmz", "")
     placemarks = extract_placemarks(kmz_file.read())
@@ -123,11 +125,12 @@ if kmz_file and template_file:
         df_template.at[row, "Latitude_homepass"] = hp["lat"]
         df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        geo = reverse_geocode(hp["lat"], hp["lon"])
-        df_template.at[row, "street"] = geo["street"]
-        df_template.at[row, "district"] = geo["district"]
-        df_template.at[row, "subdistrict"] = geo["subdistrict"]
-        df_template.at[row, "postalcode"] = geo["postalcode"]
+        # Ambil alamat dari OpenCage
+        address = reverse_geocode_opencage(hp["lat"], hp["lon"])
+        df_template.at[row, "street"] = address["street"]
+        df_template.at[row, "district"] = address["district"]
+        df_template.at[row, "subdistrict"] = address["subdistrict"]
+        df_template.at[row, "postalcode"] = address["postalcode"]
 
         matched_fat = find_fat_by_fatcode(fatcode, fat_list)
         if matched_fat:
