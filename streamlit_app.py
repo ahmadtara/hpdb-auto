@@ -83,11 +83,23 @@ if kmz_file and template_file:
     progress = st.progress(0)
     total = len(hp)
 
+    # Pastikan kolom 'block' dan 'homenumber' ada di template
+    for col in ["block", "homenumber"]:
+    if col not in df.columns:
+        df[col] = ""
+    
     for i, h in enumerate(hp):
         if i>=len(df): break
         fc = extract_fatcode(h["path"])
         df.at[i,"fatcode"] = fc
-        df.at[i,"homenumber"] = h["name"]
+        # Tambahan logika parsing blok & homenumber
+        name_parts = h["name"].split(".")
+        if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
+        df.at[i, "block"] = name_parts[0].strip().upper()
+        df.at[i, "homenumber"] = name_parts[1].strip()
+    else:
+        df.at[i, "block"] = ""
+        df.at[i, "homenumber"] = h["name"]
         df.at[i,"Latitude_homepass"] = h["lat"]
         df.at[i,"Longitude_homepass"] = h["lon"]
         df.at[i,"district"] = rc["district"]
