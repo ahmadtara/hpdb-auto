@@ -78,17 +78,17 @@ if kmz_file and template_file:
     fdt = placemarks["FDT"]
     all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
-    # Ambil informasi FDT umum
     if fdt:
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"])
     else:
         rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-    # Ambil FDT code dari path folder dan OLT code dari description
-    fdtcode = "UNKNOWN_FDT"
-    oltcode = "UNKNOWN_OLT"
+    fdtcode = "UNKNOWN"
+    oltcode = "UNKNOWN"
+
     if fdt:
-        fdtcode = extract_fatcode(fdt[0]["path"])
+        fdtcode = fdt[0]["name"].strip().upper()
+
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
             f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
             tree = ET.parse(z.open(f))
@@ -97,8 +97,9 @@ if kmz_file and template_file:
             for pm in root.findall(".//kml:Placemark", ns):
                 name_el = pm.find("kml:name", ns)
                 desc_el = pm.find("kml:description", ns)
-                if name_el is not None and desc_el is not None and name_el.text.strip() == fdt[0]["name"]:
-                    oltcode = desc_el.text.strip().upper()
+                if name_el is not None and name_el.text.strip().upper() == fdtcode:
+                    if desc_el is not None:
+                        oltcode = desc_el.text.strip().upper()
                     break
 
     progress = st.progress(0)
