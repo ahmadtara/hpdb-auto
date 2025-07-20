@@ -6,7 +6,7 @@ from io import BytesIO
 import googlemaps
 
 # API Key Google Maps Anda
-gmaps = googlemaps.Client(key="AIzaSyCHSycfkqShMk_-kgOaHeO48ygLqoTmASk")
+gmaps = googlemaps.Client(key="AIzaSyAOVYRIgupAurZup5y1PRh8Ismb1A3lLao")
 
 st.title("📍 KMZ ➜ HPDB (Auto-Fill)")
 
