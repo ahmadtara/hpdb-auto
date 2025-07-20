@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 from io import BytesIO
 import requests
 
-st.title("📍 KMZ ➜ HPDB (Auto-Pilot By. A.Tara-P.)")
+st.title("📍KMZ ➜ HPDB (Auto-Pilot By. A.Tara-P.)")
 
 API_KEY = "91b8be587a2e4eb095f24802fd462089"
 
@@ -104,53 +104,54 @@ def find_matching_pole(fat, all_poles, tol=0.0001):
 
 # Proses utama
 if kmz_file and template_file:
-    kmz_name = kmz_file.name.replace(".kmz", "")
-    placemarks = extract_placemarks(kmz_file.read())
-    df_template = pd.read_excel(template_file)
+    with st.spinner("🔄 Sedang memproses data... Mohon tunggu hingga selesai"):
+        kmz_name = kmz_file.name.replace(".kmz", "")
+        placemarks = extract_placemarks(kmz_file.read())
+        df_template = pd.read_excel(template_file)
 
-    fat_list = placemarks["FAT"]
-    hp_list = placemarks["HP COVER"]
-    fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
+        fat_list = placemarks["FAT"]
+        hp_list = placemarks["HP COVER"]
+        fdtcode = placemarks["FDT"][0]["name"] if placemarks["FDT"] else "FDT_UNKNOWN"
 
-    all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
+        all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
 
-    row = 0
-    for hp in hp_list:
-        if row >= len(df_template):
-            break
+        row = 0
+        for hp in hp_list:
+            if row >= len(df_template):
+                break
 
-        fatcode = extract_fatcode_from_path(hp["path"])
-        df_template.at[row, "fatcode"] = fatcode
-        df_template.at[row, "homenumber"] = hp["name"]
-        df_template.at[row, "Latitude_homepass"] = hp["lat"]
-        df_template.at[row, "Longitude_homepass"] = hp["lon"]
+            fatcode = extract_fatcode_from_path(hp["path"])
+            df_template.at[row, "fatcode"] = fatcode
+            df_template.at[row, "homenumber"] = hp["name"]
+            df_template.at[row, "Latitude_homepass"] = hp["lat"]
+            df_template.at[row, "Longitude_homepass"] = hp["lon"]
 
-        # Ambil alamat dari OpenCage
-        address = reverse_geocode_opencage(hp["lat"], hp["lon"])
-        df_template.at[row, "street"] = address["street"]
-        df_template.at[row, "district"] = address["district"]
-        df_template.at[row, "subdistrict"] = address["subdistrict"]
-        df_template.at[row, "postalcode"] = address["postalcode"]
+            # Ambil alamat dari OpenCage
+            address = reverse_geocode_opencage(hp["lat"], hp["lon"])
+            df_template.at[row, "street"] = address["street"]
+            df_template.at[row, "district"] = address["district"]
+            df_template.at[row, "subdistrict"] = address["subdistrict"]
+            df_template.at[row, "postalcode"] = address["postalcode"]
 
-        matched_fat = find_fat_by_fatcode(fatcode, fat_list)
-        if matched_fat:
-            df_template.at[row, "FAT ID"] = matched_fat["name"]
-            df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
-            df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
-            df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
-        else:
-            df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
-            df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
+            matched_fat = find_fat_by_fatcode(fatcode, fat_list)
+            if matched_fat:
+                df_template.at[row, "FAT ID"] = matched_fat["name"]
+                df_template.at[row, "Pole Latitude"] = matched_fat["lat"]
+                df_template.at[row, "Pole Longitude"] = matched_fat["lon"]
+                df_template.at[row, "Pole ID"] = find_matching_pole(matched_fat, all_poles)
+            else:
+                df_template.at[row, "FAT ID"] = "FAT_NOT_FOUND"
+                df_template.at[row, "Pole ID"] = "POLE_NOT_FOUND"
 
-        df_template.at[row, "fdtcode"] = fdtcode
-        df_template.at[row, "Clustername"] = kmz_name
-        df_template.at[row, "Commercial_name"] = kmz_name
+            df_template.at[row, "fdtcode"] = fdtcode
+            df_template.at[row, "Clustername"] = kmz_name
+            df_template.at[row, "Commercial_name"] = kmz_name
 
-        row += 1
+            row += 1
 
-    st.success("✅ Data berhasil dimasukkan ke dalam template.")
-    st.dataframe(df_template.head(10))
+        st.success("✅ Data berhasil dimasukkan ke dalam template.")
+        st.dataframe(df_template.head(10))
 
-    output = BytesIO()
-    df_template.to_excel(output, index=False)
-    st.download_button("📥 Download File Hasil", output.getvalue(), file_name="HASIL_HPDB_LENGKAP.xlsx")
+        output = BytesIO()
+        df_template.to_excel(output, index=False)
+        st.download_button("📥 Download File Hasil", output.getvalue(), file_name="HASIL_HPDB_LENGKAP.xlsx")
