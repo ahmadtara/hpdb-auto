@@ -19,6 +19,7 @@ valid_users = {
     "snd": "snd0220",
     "obi": "obi",
     "tara": "123"
+    "rizky": "123"
 }
 
 # Blokir user
