@@ -18,7 +18,6 @@ HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 valid_users = {
     "snd": "snd0220",
     "obi": "obi",
-    "tara": "123"
     "rizky": "123"
 }
 
