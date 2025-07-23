@@ -1,143 +1,230 @@
-import os
-import geopandas as gpd
-from shapely.geometry import shape, Polygon, MultiPolygon
-from fastkml import kml
-import ezdxf
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import zipfile
+import xml.etree.ElementTree as ET
+from io import BytesIO
 import requests
-import numpy as np
-from ultralytics import YOLO
-from PIL import Image
-import tempfile
-import matplotlib.pyplot as plt
-from shapely.ops import unary_union
-import cv2
+import threading
 
-TARGET_EPSG = "EPSG:32760"  # UTM Zone 60S
-MODEL_PATH = "yolov8-building.pt"  # Path ke model segmentasi bangunan YOLOv8 (custom)
-GOOGLE_MAPS_API_KEY = "AIzaSyAOVYRIgupAurZup5y1PRh8Ismb1A3lLao"
+# Telegram Bot Token & Chat ID
+TELEGRAM_TOKEN = "7885701086:AAEgXt9fN7qufBbsf0NGBDvhtj3IqzohvKw"
+TELEGRAM_CHAT_ID = "6122753506"
+BOT_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# --- Ekstrak Polygon Area dari KML ---
-def extract_polygon_from_kml(kml_path):
-    gdf = gpd.read_file(kml_path)
-    polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
-    if polygons.empty:
-        raise Exception("No Polygon found in KML")
-    return unary_union(polygons.geometry), polygons.crs
+# HERE API Key
+HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
-# --- Ambil Citra Google Maps dari Polygon ---
-def download_static_map(polygon):
-    from shapely.geometry import box
+# Login users
+valid_users = {
+    "snd": "snd0220",
+    "obi": "obi",
+    "rizky": "123"
+}
 
-    bounds = polygon.bounds
-    west, south, east, north = bounds
-    center_lat = (south + north) / 2
-    center_lon = (west + east) / 2
+# Blokir user
+blocked_users = set()
 
-    url = (
-        f"https://maps.googleapis.com/maps/api/staticmap"
-        f"?center={center_lat},{center_lon}"
-        f"&zoom=18&size=640x640&maptype=satellite"
-        f"&key={GOOGLE_MAPS_API_KEY}"
-    )
+# Fungsi kirim pesan Telegram
+def send_telegram(message):
+    try:
+        requests.post(f"{BOT_API_URL}/sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+    except:
+        pass
 
-    response = requests.get(url)
-    if not response.ok:
-        raise Exception("Gagal mengunduh citra dari Google Maps")
-
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-    temp_file.write(response.content)
-    temp_file.close()
-    return Image.open(temp_file.name).convert("RGB")
-
-# --- Deteksi Bangunan dari Citra ---
-def detect_buildings_from_image(image_path):
-    model = YOLO(MODEL_PATH)
-    results = model(image_path)
-    masks = results[0].masks
-
-    if masks is None:
-        return []
-
-    polygons = []
-    for mask in masks.data:
-        mask_np = mask.cpu().numpy().astype(np.uint8) * 255
-        contours, _ = cv2.findContours(mask_np, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            if len(cnt) >= 3:
-                coords = [(int(p[0][0]), int(p[0][1])) for p in cnt]
-                poly = Polygon(coords)
-                if poly.is_valid:
-                    polygons.append(poly)
-
-    return polygons
-
-# --- Ekspor ke DXF ---
-def export_to_dxf_buildings(gdf, dxf_path, polygon=None, polygon_crs=None):
-    doc = ezdxf.new()
-    msp = doc.modelspace()
-
-    bounds = [(pt[0], pt[1]) for geom in gdf.geometry for pt in geom.exterior.coords]
-    min_x = min(x for x, y in bounds)
-    min_y = min(y for x, y in bounds)
-
-    for geom in gdf.geometry:
-        if geom.geom_type == "Polygon":
-            coords = [(pt[0] - min_x, pt[1] - min_y) for pt in geom.exterior.coords]
-            msp.add_lwpolyline(coords, dxfattribs={"layer": "BUILDINGS"})
-        elif geom.geom_type == "MultiPolygon":
-            for poly in geom.geoms:
-                coords = [(pt[0] - min_x, pt[1] - min_y) for pt in poly.exterior.coords]
-                msp.add_lwpolyline(coords, dxfattribs={"layer": "BUILDINGS"})
-
-    doc.set_modelspace_vport(height=10000)
-    doc.saveas(dxf_path)
-
-# --- Proses Utama ---
-def process_kml_to_dxf(kml_path, output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-    polygon, polygon_crs = extract_polygon_from_kml(kml_path)
-
-    image = download_static_map(polygon)
-    image_path = os.path.join(output_dir, "map.png")
-    image.save(image_path)
-
-    building_polygons = detect_buildings_from_image(image_path)
-    if not building_polygons:
-        raise Exception("Tidak ada bangunan terdeteksi dari citra.")
-
-    gdf = gpd.GeoDataFrame(geometry=building_polygons, crs="EPSG:4326")
-    gdf = gdf.clip(polygon)
-
-    dxf_path = os.path.join(output_dir, "buildings_detected.dxf")
-    geojson_path = os.path.join(output_dir, "buildings_detected.geojson")
-    gdf.to_file(geojson_path, driver="GeoJSON")
-    export_to_dxf_buildings(gdf.to_crs(TARGET_EPSG), dxf_path)
-    return dxf_path, geojson_path, True
-
-# --- Streamlit UI ---
-st.set_page_config(page_title="KML → DXF Auto Building Detector", layout="wide")
-st.title("🌍 KML → DXF Auto Building Detector")
-st.caption("Upload file .KML (batas area perumahan)")
-
-kml_file = st.file_uploader("Upload file .KML", type=["kml"])
-
-if kml_file:
-    with st.spinner("💫 Memproses file dan mendeteksi rumah..."):
+# Monitor perintah Telegram
+def monitor_telegram():
+    offset = None
+    while True:
         try:
-            temp_input = f"/tmp/{kml_file.name}"
-            with open(temp_input, "wb") as f:
-                f.write(kml_file.read())
+            resp = requests.get(f"{BOT_API_URL}/getUpdates", params={"timeout": 10, "offset": offset})
+            data = resp.json()
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message", {}).get("text", "")
+                if msg.startswith("/add "):
+                    _, uname, pw = msg.strip().split(maxsplit=2)
+                    valid_users[uname] = pw
+                    send_telegram(f"Akun '{uname}' berhasil ditambahkan.")
+                elif msg.startswith("/block "):
+                    uname = msg.strip().split()[1]
+                    blocked_users.add(uname)
+                    send_telegram(f"Akun '{uname}' berhasil diblokir.")
+        except:
+            continue
 
-            output_dir = "/tmp/output"
-            dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir)
+# Jalankan pemantauan Telegram
+threading.Thread(target=monitor_telegram, daemon=True).start()
 
-            if ok:
-                st.success("✅ Berhasil diekspor ke DXF!")
-                with open(dxf_path, "rb") as f:
-                    st.download_button("⬇️ Download DXF", data=f, file_name="buildings_detected.dxf")
-                with open(geojson_path, "rb") as f:
-                    st.download_button("⬇️ Download GeoJSON", data=f, file_name="buildings_detected.geojson")
-        except Exception as e:
-            st.error(f"❌ Terjadi kesalahan: {e}")
+# ---------------- LOGIN PAGE ---------------- #
+def login_page():
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png", width=300)
+    st.markdown("## 🔐 Login to MyRepublic Auto HPDB Auto-Pilot⚡By.A.Tara-P.")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username in blocked_users:
+            st.error("⛔ Akun ini telah diblokir.")
+        elif username in valid_users and password == valid_users[username]:
+            st.session_state["logged_in"] = True
+            st.session_state["user"] = username
+            st.success(f"Login berhasil! 🎉 Selamat datang, {username}.")
+            send_telegram(f"✅ Login berhasil: {username}")
+            st.rerun()
+        else:
+            st.error("❌ Username atau Password salah!")
+
+# ---------------- MAIN PAGE ---------------- #
+def main_page():
+    st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
+    st.write(f"Hai, **{st.session_state['user']}** 👋")
+
+    if st.button("🔒 Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
+        st.rerun()
+
+    kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+    template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
+
+    def extract_placemarks(kmz_bytes):
+        def recurse_folder(folder, ns, path=""):
+            items = []
+            name_el = folder.find("kml:name", ns)
+            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
+            new_path = f"{path}/{folder_name}" if path else folder_name
+            for sub in folder.findall("kml:Folder", ns):
+                items += recurse_folder(sub, ns, new_path)
+            for pm in folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                coord = pm.find(".//kml:coordinates", ns)
+                if nm is not None and coord is not None:
+                    lon, lat = coord.text.strip().split(",")[:2]
+                    items.append({
+                        "name": nm.text.strip(),
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "path": new_path
+                    })
+            return items
+
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+            root = ET.parse(z.open(f)).getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+            all_pm = []
+            for folder in root.findall(".//kml:Folder", ns):
+                all_pm += recurse_folder(folder, ns)
+            data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
+            for p in all_pm:
+                for k in data:
+                    if k in p["path"]:
+                        data[k].append(p)
+                        break
+            return data
+
+    def extract_fatcode(path):
+        for part in path.split("/"):
+            if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+                return part
+        return "UNKNOWN"
+
+    def reverse_here(lat, lon):
+        url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
+        r = requests.get(url)
+        if r.status_code == 200:
+            comp = r.json().get("items", [{}])[0].get("address", {})
+            return {
+                "district": comp.get("district", "").upper(),
+                "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
+                "postalcode": comp.get("postalCode", "").upper(),
+                "street": comp.get("street", "").upper()
+            }
+        return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+
+    if kmz_file and template_file:
+        kmz_bytes = kmz_file.read()
+        placemarks = extract_placemarks(kmz_bytes)
+        df = pd.read_excel(template_file)
+        fat = placemarks["FAT"]
+        hp = placemarks["HP COVER"]
+        fdt = placemarks["FDT"]
+        all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
+
+        rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+        fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
+        oltcode = "UNKNOWN"
+
+        if fdt:
+            with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+                f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+                tree = ET.parse(z.open(f))
+                root = tree.getroot()
+                ns = {"kml": "http://www.opengis.net/kml/2.2"}
+                for pm in root.findall(".//kml:Placemark", ns):
+                    name_el = pm.find("kml:name", ns)
+                    desc_el = pm.find("kml:description", ns)
+                    if name_el is not None and name_el.text.strip().upper() == fdtcode:
+                        if desc_el is not None:
+                            oltcode = desc_el.text.strip().upper()
+                        break
+
+        progress = st.progress(0)
+        total = len(hp)
+
+        for col in ["block", "homenumber", "fdtcode", "oltcode"]:
+            if col not in df.columns:
+                df[col] = ""
+
+        for i, h in enumerate(hp):
+            if i >= len(df): break
+            fc = extract_fatcode(h["path"])
+            df.at[i, "fatcode"] = fc
+            name_parts = h["name"].split(".")
+            if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
+                df.at[i, "block"] = name_parts[0].strip().upper()
+                df.at[i, "homenumber"] = name_parts[1].strip()
+            else:
+                df.at[i, "block"] = ""
+                df.at[i, "homenumber"] = h["name"]
+            df.at[i, "Latitude_homepass"] = h["lat"]
+            df.at[i, "Longitude_homepass"] = h["lon"]
+            df.at[i, "district"] = rc["district"]
+            df.at[i, "subdistrict"] = rc["subdistrict"]
+            df.at[i, "postalcode"] = rc["postalcode"]
+            df.at[i, "fdtcode"] = fdtcode
+            df.at[i, "oltcode"] = oltcode
+            hh = reverse_here(h["lat"], h["lon"])
+            df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
+            mf = next((x for x in fat if fc in x["name"]), None)
+            if mf:
+                df.at[i, "FAT ID"] = mf["name"]
+                df.at[i, "Pole Latitude"] = mf["lat"]
+                df.at[i, "Pole Longitude"] = mf["lon"]
+                pol = next((p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4), "POLE_NOT_FOUND")
+                df.at[i, "Pole ID"] = pol
+                fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
+                df.at[i, "FAT Address"] = fataddr
+            else:
+                df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
+                df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
+                df.at[i, "FAT Address"] = ""
+            progress.progress(int((i + 1) * 100 / total))
+
+        progress.empty()
+        st.success("✅ Selesai!")
+        st.dataframe(df.head(10))
+        buf = BytesIO()
+        df.to_excel(buf, index=False)
+        st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
+# ---------------- ROUTER ---------------- #
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["user"] = None
+
+if not st.session_state["logged_in"]:
+    login_page()
+else:
+    main_page()
