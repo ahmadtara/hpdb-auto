@@ -1,7 +1,6 @@
 streamlit
 pandas
 xlsxwriter
-lxml
 openpyxl
 opencage
 requests
