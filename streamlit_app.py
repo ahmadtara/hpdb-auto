@@ -81,10 +81,10 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     login_page()
 else:
-    menu = st.sidebar.radio("📌 Menu", ["Auto HPDB", "KML → Jalan", "Logout"])
+    menu = st.sidebar.radio("📌 Menu", ["KMZ → HPDB", "KML → Jalan", "Logout"])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
 
-    if menu == "Auto HPDB":
+    if menu == "KMZ → HPDB":
         run_hpdb(HERE_API_KEY)
     elif menu == "KML → Jalan":
         run_kml_dxf()
