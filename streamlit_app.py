@@ -16,7 +16,7 @@ from shapely.ops import unary_union, linemerge, snap, split, polygonize
 
 
 # ------------------ LOGIN ------------------ #
-USERS = {"admin": "admin123", "tara": "123"}
+USERS = {"admin": "admin123", "tara": "123", "rizky": "123"}
 
 def login():
     st.title("🔐 Login Aplikasi")
