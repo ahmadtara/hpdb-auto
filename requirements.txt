@@ -11,3 +11,4 @@ osmnx
 ezdxf
 lxml
 fastkml
+polyline
