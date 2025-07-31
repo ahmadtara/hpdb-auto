@@ -1,17 +1,19 @@
 import streamlit as st
+import pandas as pd
+import zipfile
+import xml.etree.ElementTree as ET
+from io import BytesIO
+import requests
+import threading
 import os
 import zipfile
-import tempfile
-import json
-import xml.etree.ElementTree as ET
-import requests
-import polyline
-import fiona
-from shapely.geometry import mapping, LineString
+import geopandas as gpd
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString
 from fastkml import kml
-from datetime import datetime
+import osmnx as ox
 import ezdxf
-from geopy.distance import geodesic
+from shapely.ops import unary_union, linemerge, snap, split, polygonize
+
 
 # ------------------ LOGIN ------------------ #
 USERS = {"admin": "admin123", "tara": "123"}
