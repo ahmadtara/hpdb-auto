@@ -7,7 +7,7 @@ import requests
 
 def run_hpdb(HERE_API_KEY):
 
-    st.title("📍 KMZ ➜ HPDB (Auto-Pilot ⚡By.A.Tara-P.)")
+    st.title("📍 KMZ ➜ HPDB (Auto-Pilot⚡)")
     st.write(f"Hai, **{st.session_state['user']}** 👋")
 
     if st.button("🔒 Logout"):
