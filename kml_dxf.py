@@ -105,7 +105,7 @@ def process_kml_to_dxf(kml_path, output_dir):
         raise Exception("Tidak ada jalan ditemukan di dalam area polygon.")
 
 def run_kml_dxf():
-    st.title("🌍 SYARAT UPLOAD = FILE KML → ISINYA HANYA FOLDER BOUNDARY")
+    st.title("🌍 SYARAT UPLOAD → FILE KML → ISINYA HANYA FOLDER BOUNDARY")
     st.caption("Upload file .KML (area batas cluster)")
     kml_file = st.file_uploader("Upload file .KML", type=["kml"])
 
