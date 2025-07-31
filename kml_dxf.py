@@ -1,17 +1,15 @@
 import os
 import zipfile
-import geopandas as gpd
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString
 from fastkml import kml
-import osmnx as ox
-import ezdxf
-from shapely.ops import unary_union, linemerge, snap, split, polygonize
-import pandas as pd
+import geopandas as gpd
 import streamlit as st
+import ezdxf
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString
+from shapely.ops import unary_union, linemerge, snap, split, polygonize
+import osmnx as ox
 
-TARGET_EPSG = "EPSG:32760"  # UTM Zone 60S
+TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
-
 
 def classify_layer(hwy):
     if hwy in ['motorway', 'trunk', 'primary']:
@@ -23,7 +21,6 @@ def classify_layer(hwy):
     elif hwy in ['footway', 'path', 'cycleway']:
         return 'PATHS', 10
     return 'OTHER', DEFAULT_WIDTH
-
 
 def extract_polygon_from_kml(kml_path):
     gdf = gpd.read_file(kml_path)
@@ -129,27 +126,25 @@ def process_kml_to_dxf(kml_path, output_dir):
     else:
         raise Exception("Tidak ada jalan ditemukan di dalam area polygon.")
 
-# Streamlit UI
-st.set_page_config(page_title="KML → DXF Road Converter", layout="wide")
-st.title("🌍 KML → DXF Road Converter")
-st.caption("Upload file .KML (area batas cluster)")
+def run_kml_dxf():
+    st.title("🌍 KML → DXF Road Converter")
+    st.caption("Upload file .KML (area batas cluster)")
+    kml_file = st.file_uploader("Upload file .KML", type=["kml"])
 
-kml_file = st.file_uploader("Upload file .KML", type=["kml"])
+    if kml_file:
+        with st.spinner("💫 Memproses file..."):
+            try:
+                temp_input = f"/tmp/{kml_file.name}"
+                with open(temp_input, "wb") as f:
+                    f.write(kml_file.read())
 
-if kml_file:
-    with st.spinner("💫 Memproses file..."):
-        try:
-            temp_input = f"/tmp/{kml_file.name}"
-            with open(temp_input, "wb") as f:
-                f.write(kml_file.read())
+                output_dir = "/tmp/output"
+                dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir)
 
-            output_dir = "/tmp/output"
-            dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir)
-
-            if ok:
-                st.success("✅ Berhasil diekspor ke DXF!")
-                with open(dxf_path, "rb") as f:
-                    st.download_button("⬇️ Download DXF", data=f, file_name="roadmap_osm.dxf")
-           
-        except Exception as e:
-            st.error(f"❌ Terjadi kesalahan: {e}")
+                if ok:
+                    st.success("✅ Berhasil diekspor ke DXF!")
+                    with open(dxf_path, "rb") as f:
+                        st.download_button("⬇️ Download Jalan Autocad UTM 60", data=f, file_name="roadmap_osm.dxf")
+             
+            except Exception as e:
+                st.error(f"❌ Terjadi kesalahan: {e}")
