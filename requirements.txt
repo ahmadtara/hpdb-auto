@@ -12,3 +12,4 @@ ezdxf
 lxml
 fastkml
 polyline
+fiona
