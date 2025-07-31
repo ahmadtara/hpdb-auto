@@ -122,8 +122,8 @@ def run_kml_dxf():
                 if ok:
                     st.success("✅ Berhasil diekspor ke DXF!")
                     with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download DXF", data=f, file_name="roadmap_osm.dxf")
+                        st.download_button("⬇️ Download Autocad - Pastikan template kamu UTM 60+", data=f, file_name="roadmap_osm.dxf")
                     with open(geojson_path, "rb") as f:
-                        st.download_button("⬇️ Download GeoJSON", data=f, file_name="roadmap_osm.geojson")
+                        st.download_button("", data=f, file_name="roadmap_osm.geojson")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
