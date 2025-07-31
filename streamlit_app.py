@@ -138,12 +138,11 @@ def main_page():
         kml_to_dxf_page()
 
 # ------------------ MAIN ------------------ #
-if __name__ == "__main__":
-    if "logged_in" not in st.session_state:
-        st.session_state["logged_in"] = False
-        st.session_state["user"] = None
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["user"] = None
 
-    if not st.session_state["logged_in"]:
-        login()
-    else:
-        main_page()
+if st.session_state["logged_in"]:
+    main_page()
+else:
+    login()
