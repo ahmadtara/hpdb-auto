@@ -125,7 +125,7 @@ def hpdb_page():
 # ------------------ MENU UTAMA ------------------ #
 def main_page():
     st.sidebar.title("📂 Menu Utama")
-    menu = st.sidebar.radio("Pilih halaman", ["KMZ ➜ HPDB", "KML ➜ DXF Road Converter"])
+    menu = st.sidebar.radio("Pilih halaman", ["KMZ ➜ HPDB", "KML ➜ DXF Jalan"])
 
     if st.sidebar.button("🔒 Logout"):
         st.session_state["logged_in"] = False
@@ -134,7 +134,7 @@ def main_page():
 
     if menu == "KMZ ➜ HPDB":
         hpdb_page()
-    elif menu == "KML ➜ DXF Road Converter":
+    elif menu == "KML ➜ DXF jalan UTM 60":
         kml_to_dxf_page()
 
 # ------------------ MAIN ------------------ #
