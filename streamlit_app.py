@@ -58,7 +58,7 @@ threading.Thread(target=monitor_telegram, daemon=True).start()
 
 # UI Pages
 def login_page():
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO...", width=300)
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png", width=300)
     st.markdown("## 🔐 Login to MyRepublic Auto HPDB Auto-Pilot⚡By.A.Tara-P.")
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
