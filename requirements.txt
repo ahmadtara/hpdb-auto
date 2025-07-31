@@ -6,3 +6,9 @@ openpyxl
 opencage
 requests
 user-agents
+geopandas
+shapely
+osmnx
+ezdxf
+lxml
+fastkml
