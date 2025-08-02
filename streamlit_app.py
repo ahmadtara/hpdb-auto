@@ -72,6 +72,7 @@ def login_page():
 # -------------- ✅ PANGGIL MODUL FUNGSIONALITAS ---------------- #
 from from_hpdb import run_hpdb
 from kml_dxf import run_kml_dxf
+from kmz_dwg import run_kmz_to_dwg  # ✅ Tambahkan ini
 
 # -------------- ✅ APLIKASI UTAMA ---------------- #
 if "logged_in" not in st.session_state:
@@ -81,14 +82,23 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     login_page()
 else:
-    menu = st.sidebar.radio("📌 Menu", ["KMZ → HPDB", "KML → Jalan", "Logout"])
+    menu = st.sidebar.radio("📌 Menu", [
+        "KMZ → HPDB",
+        "KML → Jalan",
+        "KMZ → DWG",  # ✅ Tambahkan menu baru
+        "Logout"
+    ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
 
     if menu == "KMZ → HPDB":
         run_hpdb(HERE_API_KEY)
     elif menu == "KML → Jalan":
         run_kml_dxf()
+    elif menu == "KMZ → DWG":
+        run_kmz_to_dwg()  # ✅ Panggil fungsi konversi KMZ ke DWG
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
+
