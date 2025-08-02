@@ -246,7 +246,7 @@ def draw_to_template(classified, template_path):
     return doc
 
 # ---------- FUNGSI UTAMA UNTUK DIPANGGIL ---------- #
-def kmz_to_dwg():
+def run_kmz_to_dwg():
     st.title("🏗️ KMZ → DXF (Masuk ke Template)")
 
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
@@ -275,4 +275,5 @@ def kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
