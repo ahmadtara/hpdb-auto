@@ -4,7 +4,6 @@ import os
 from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
-import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
 from shapely.ops import unary_union, polygonize, linemerge, snap
 import osmnx as ox
@@ -82,14 +81,15 @@ def parse_kml(kml_path):
                 })
     return items
 
-def extract_boundary_from_doc_kml(doc_kml_path):
-    gdf = gpd.read_file(doc_kml_path)
-    gdf["name_upper"] = gdf.get("Name", "").str.upper()
-    filtered = gdf[gdf["name_upper"].str.contains("BOUNDARY CLUSTER", na=False)]
-    polygons = filtered.geometry[filtered.geometry.type.isin(["Polygon", "MultiPolygon"])]
-    if polygons.empty:
-        raise Exception("❌ Tidak ada Polygon valid dari BOUNDARY CLUSTER.")
-    return unary_union(polygons), gdf.crs
+def extract_boundary_from_items(items):
+    polys = []
+    for obj in items:
+        if obj['type'] == 'polygon' and obj['folder'] == 'BOUNDARY CLUSTER':
+            poly = Polygon(obj['coords'])
+            polys.append(poly)
+    if not polys:
+        raise Exception("❌ Tidak ada Polygon valid dari folder BOUNDARY CLUSTER.")
+    return unary_union(polys)
 
 def get_osm_roads(polygon):
     roads = ox.features_from_polygon(polygon, tags={"highway": True})
@@ -131,7 +131,7 @@ def run_kmz_to_dwg():
 
                 kml_path = extract_kmz(uploaded_kmz, extract_dir)
                 items = parse_kml(kml_path)
-                boundary_polygon, polygon_crs = extract_boundary_from_doc_kml(kml_path)
+                boundary_polygon = extract_boundary_from_items(items)
                 roads = get_osm_roads(boundary_polygon)
 
                 doc = ezdxf.readfile("template_ref.dxf")
@@ -180,4 +180,4 @@ def run_kmz_to_dwg():
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan: {e}")
 
-run_kmz_all()
+run_kmz_to_dwg()
