@@ -82,34 +82,34 @@ def parse_kml(kml_path):
                 })
     return items
 
-def get_osm_roads_from_polygon(coords):
-    polygon = Polygon(coords)
+def extract_boundary_from_doc_kml(doc_kml_path):
+    gdf = gpd.read_file(doc_kml_path)
+    gdf["name_upper"] = gdf.get("Name", "").str.upper()
+    filtered = gdf[gdf["name_upper"].str.contains("BOUNDARY CLUSTER", na=False)]
+    polygons = filtered.geometry[filtered.geometry.type.isin(["Polygon", "MultiPolygon"])]
+    if polygons.empty:
+        raise Exception("❌ Tidak ada Polygon valid dari BOUNDARY CLUSTER.")
+    return unary_union(polygons), gdf.crs
+
+def get_osm_roads(polygon):
     roads = ox.features_from_polygon(polygon, tags={"highway": True})
     roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
     roads = roads.explode(index_parts=False)
     roads = roads.clip(polygon)
     roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
-    return roads, polygon
+    return roads
 
-def export_osm_roads_to_dxf(roads_gdf, polygon, out_path):
-    doc = ezdxf.new()
-    msp = doc.modelspace()
-    roads_utm = roads_gdf.to_crs(TARGET_EPSG)
-    minx, miny, _, _ = roads_utm.total_bounds
+def latlon_to_xy(lat, lon):
+    return transformer.transform(lon, lat)
 
-    for _, row in roads_utm.iterrows():
-        geom = row.geometry
-        geom = linemerge(geom) if isinstance(geom, MultiLineString) else geom
-        buffered = geom.buffer(5)
-        outlines = list(polygonize(buffered.boundary))
-        for outline in outlines:
-            coords = [(pt[0] - minx, pt[1] - miny) for pt in outline.exterior.coords]
-            msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
-
-    doc.saveas(out_path)
+def apply_offset(points_xy):
+    xs = [x for x, y in points_xy]
+    ys = [y for x, y in points_xy]
+    cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+    return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
 
 def run_kmz_to_dwg():
-    st.title("📦 KMZ Cluster Tool (DWG + Roads)")
+    st.title("📦 KMZ Cluster Tool (Gabung DWG + Roads)")
     st.markdown("""
     ### 🔧 Panduan:
     - Upload file **KMZ** berisi semua folder (FDT, FAT, HP COVER, BOUNDARY CLUSTER, dll).
@@ -131,33 +131,53 @@ def run_kmz_to_dwg():
 
                 kml_path = extract_kmz(uploaded_kmz, extract_dir)
                 items = parse_kml(kml_path)
+                boundary_polygon, polygon_crs = extract_boundary_from_doc_kml(kml_path)
+                roads = get_osm_roads(boundary_polygon)
 
-                # === Proses OSM Road ===
-                boundary_polygons = [
-                    Polygon(obj['coords']) for obj in items
-                    if obj['folder'] == "BOUNDARY CLUSTER" and obj['type'] == 'polygon'
-                ]
-                if not boundary_polygons:
-                    st.warning("❗ Tidak ada folder 'BOUNDARY CLUSTER' dengan Polygon.")
-                else:
-                    roads, poly = get_osm_roads_from_polygon(boundary_polygons[0].exterior.coords)
-                    if not roads.empty:
-                        osm_dxf_path = "output_roads.dxf"
-                        export_osm_roads_to_dxf(roads, poly, osm_dxf_path)
-                        st.success("✅ OSM Roads berhasil diproses.")
-                        with open(osm_dxf_path, "rb") as f:
-                            st.download_button("⬇️ Download Roads DXF", f, file_name="roadmap_osm.dxf")
+                doc = ezdxf.readfile("template_ref.dxf")
+                msp = doc.modelspace()
 
-                # === Proses Template FDT/FAT ===
-                from copy import deepcopy
-                classified = classify_items([obj for obj in items if obj['type'] != 'polygon'])
-                updated_doc = draw_to_template(classified, "template_ref.dxf")
-                if updated_doc:
-                    output_dxf = "converted_output.dxf"
-                    updated_doc.saveas(output_dxf)
-                    st.success("✅ Konversi FDT/FAT berhasil.")
-                    with open(output_dxf, "rb") as f:
-                        st.download_button("⬇️ Download DWG FDT/FAT", f, file_name="output_from_kmz.dxf")
+                # Tambahkan jalan dari OSM ke DXF utama
+                if not roads.empty:
+                    roads_utm = roads.to_crs(TARGET_EPSG)
+                    minx, miny, _, _ = roads_utm.total_bounds
+                    for _, row in roads_utm.iterrows():
+                        geom = row.geometry
+                        geom = linemerge(geom) if isinstance(geom, MultiLineString) else geom
+                        buffered = geom.buffer(5)
+                        outlines = list(polygonize(buffered.boundary))
+                        for outline in outlines:
+                            coords = [(pt[0] - minx, pt[1] - miny) for pt in outline.exterior.coords]
+                            msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
+
+                # Tambahkan semua koordinat point dan path dari KMZ seperti biasa (opsional)
+                all_xy = []
+                for obj in items:
+                    if obj['type'] == 'point':
+                        all_xy.append(latlon_to_xy(obj['latitude'], obj['longitude']))
+                    elif obj['type'] == 'path':
+                        all_xy.extend([latlon_to_xy(lat, lon) for lat, lon in obj['coords']])
+
+                if all_xy:
+                    shifted_all, (cx, cy) = apply_offset(all_xy)
+                    idx = 0
+                    for obj in items:
+                        if obj['type'] == 'point':
+                            obj['xy'] = shifted_all[idx]
+                            idx += 1
+                        elif obj['type'] == 'path':
+                            obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
+                            idx += len(obj['coords'])
+                            msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": obj['folder']})
+
+                out_path = "combined_output.dxf"
+                doc.saveas(out_path)
+
+                st.success("✅ DXF gabungan berhasil dibuat!")
+                with open(out_path, "rb") as f:
+                    st.download_button("⬇️ Download DXF Gabungan", f, file_name="combined_output.dxf")
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan: {e}")
+
+run_kmz_all()
