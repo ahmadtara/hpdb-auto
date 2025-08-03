@@ -13,7 +13,6 @@ target_folders = {
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK'
 }
 
-# ---------- Fungsi Ekstrak & Parse KMZ ---------- #
 def extract_kmz(kmz_path, extract_dir):
     with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
         kmz_file.extractall(extract_dir)
@@ -116,7 +115,6 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-# ---------- Fungsi Gambar ke Template ---------- #
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
@@ -213,14 +211,19 @@ def draw_to_template(classified, template_path):
             inserted_block = False
             if block_name:
                 try:
+                    scale_x = getattr(matchblock, "xscale", 1.0)
+                    scale_y = getattr(matchblock, "yscale", 1.0)
+                    scale_z = getattr(matchblock, "zscale", 1.0)
+                    if layer_name == "FDT":
+                        scale_x = scale_y = scale_z = 0.0025
                     msp.add_blockref(
                         name=block_name,
                         insert=(x, y),
                         dxfattribs={
                             "layer": true_layer,
-                            "xscale": getattr(matchblock, "xscale", 1.0),
-                            "yscale": getattr(matchblock, "yscale", 1.0),
-                            "zscale": getattr(matchblock, "zscale", 1.0),
+                            "xscale": scale_x,
+                            "yscale": scale_y,
+                            "zscale": scale_z,
                         }
                     )
                     inserted_block = True
@@ -234,10 +237,16 @@ def draw_to_template(classified, template_path):
                 text_layer = "FEATURE_LABEL" if obj['folder'] in [
                     "NEW POLE 7-3", "NEW POLE 7-4", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
                 ] else true_layer
+
                 text_color = 1 if text_layer == "FEATURE_LABEL" else 256
 
+                if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"]:
+                    text_height = 5.0
+                else:
+                    text_height = 1.5
+
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 1.5,
+                    "height": text_height,
                     "layer": text_layer,
                     "color": text_color,
                     "insert": (x + 2, y)
@@ -245,7 +254,6 @@ def draw_to_template(classified, template_path):
 
     return doc
 
-# ---------- FUNGSI UTAMA UNTUK DIPANGGIL ---------- #
 def run_kmz_to_dwg():
     st.title("🏗️ KMZ → DXF (Masuk ke Template)")
 
@@ -275,5 +283,3 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
-
-
