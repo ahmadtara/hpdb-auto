@@ -98,12 +98,13 @@ else:
         run_kml_dxf()
     elif menu == "KMZ → DWG":
         run_kmz_to_dwg()
-    elif menu == "KMZ vs HPDB":
+    elif menu == "Checker KMZ vs HPDB":
         run_kmz_vs_hpdb()
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
