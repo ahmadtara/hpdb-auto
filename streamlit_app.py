@@ -73,6 +73,7 @@ def login_page():
 from from_hpdb import run_hpdb
 from kml_dxf import run_kml_dxf
 from kmz_dwg import run_kmz_to_dwg  # ✅ Tambahkan ini
+from kmz_vs import run_kmz_to_vs  # ✅ Tambahkan ini
 
 # -------------- ✅ APLIKASI UTAMA ---------------- #
 if "logged_in" not in st.session_state:
@@ -98,11 +99,12 @@ else:
     elif menu == "KMZ → DWG":
         run_kmz_to_dwg()  # ✅ Panggil fungsi konversi KMZ ke DWG
     elif menu == "KMZ vs HPDB":
-    run_kmz_vs_hpdb()  # ✅ Panggil fungsi validasi KMZ dengan HPDB
+    run_kmz_vs_vs()  # ✅ Panggil fungsi validasi KMZ dengan HPDB
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
