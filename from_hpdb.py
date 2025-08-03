@@ -8,8 +8,8 @@ import requests
 def run_hpdb(HERE_API_KEY):
 
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot⚡)")
-    st.markdown("<h3 style='font-weight: normal;'>Hai, <b>{}</b> 👋CATATAN PENTING</h3>".format(st.session_state.get("user", "User")), unsafe_allow_html=True)
-    st.write(f"Hai, **{st.session_state['user']}** 👋")
+    st.markdown("<h2 style='font-weight: normal;'>Hai, <b>{}</b>👋 <br> ✅CATATAN PENTING : <br> 1. TEMPLATE XLSX HARUS DI SESUAIKAN JUMLAHNYA DENGAN TOTAL HOMEPASS DARI KMZ <br> 2. BLOCK AGAR TERPISAH OTOMATIS HARUS PAKAI TITIK, CONTOH B.1 DAN A.1 <br> 3. Fitur Otomatis = FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass <br> 4. OLT CODE agar otomatis didalam Description FDT wajib di isi kode OLT <br> 5. Street tidak semua nya dapat terisi otomatis, krena ada beberapa jalan di maps unnamed road </h3>".format(st.session_state.get("user", "User")), unsafe_allow_html=True)
+
 
     if st.button("🔒 Logout"):
         st.session_state["logged_in"] = False
@@ -149,4 +149,5 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
