@@ -86,6 +86,7 @@ else:
         "KMZ → HPDB",
         "KML → Jalan",
         "KMZ → DWG",  # ✅ Tambahkan menu baru
+        "Checker KMZ vs HPDB",  # ✅ Tambahan menu baru
         "Logout"
     ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
@@ -96,9 +97,12 @@ else:
         run_kml_dxf()
     elif menu == "KMZ → DWG":
         run_kmz_to_dwg()  # ✅ Panggil fungsi konversi KMZ ke DWG
+    elif menu == "KMZ vs HPDB":
+    run_kmz_vs_hpdb()  # ✅ Panggil fungsi validasi KMZ dengan HPDB
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
