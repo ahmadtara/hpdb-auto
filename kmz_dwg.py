@@ -7,6 +7,7 @@ from pyproj import Transformer
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
 from shapely.ops import unary_union, polygonize, linemerge, snap
 import osmnx as ox
+import geopandas as gpd
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 TARGET_EPSG = "EPSG:32760"
@@ -89,15 +90,11 @@ def extract_boundary_from_items(items):
             polys.append(poly)
     if not polys:
         raise Exception("❌ Tidak ada Polygon valid dari folder BOUNDARY CLUSTER.")
-    return unary_union(polys)
+    gdf = gpd.GeoSeries(polys, crs="EPSG:4326")
+    return unary_union(gdf), gdf.crs
 
 def get_osm_roads(polygon):
-    roads = ox.features_from_polygon(polygon, tags={"highway": True})
-    roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
-    roads = roads.explode(index_parts=False)
-    roads = roads.clip(polygon)
-    roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
-    return roads
+    return ox.features_from_polygon(polygon, tags={"highway": True})
 
 def latlon_to_xy(lat, lon):
     return transformer.transform(lon, lat)
@@ -131,7 +128,7 @@ def run_kmz_to_dwg():
 
                 kml_path = extract_kmz(uploaded_kmz, extract_dir)
                 items = parse_kml(kml_path)
-                boundary_polygon = extract_boundary_from_items(items)
+                boundary_polygon, boundary_crs = extract_boundary_from_items(items)
                 roads = get_osm_roads(boundary_polygon)
 
                 doc = ezdxf.readfile("template_ref.dxf")
@@ -179,5 +176,7 @@ def run_kmz_to_dwg():
 
         except Exception as e:
             st.error(f"❌ Terjadi kesalahan: {e}")
+
+
 
 run_kmz_to_dwg()
