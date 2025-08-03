@@ -132,8 +132,8 @@ def run_kml_dxf():
 <h2>👋 Hai, <span style='color:#0A84FF'>obi</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
 1️⃣ <span style='color:#FF6B6B;'>POLYGON KML</span> yang disave tidak dalam folder .<br>
-2️⃣ Maksudnya lansung save polygon saja tanpa pakai folder<br>
-3️⃣ Setelah berhasil silahkan gabungkan manual dengan file KMZ > DWG </span>.<br><br>
+2️⃣ Maksudnya lansung save polygon saja tanpa pakai folder BOUNDRY CLUSTER<br>
+3️⃣ Jalan akan dibuat otomatis bedasarkan boundary cluster/polygon yang taelah di save</span>.<br><br>
 
 """, unsafe_allow_html=True)
     st.caption("Upload file .KML (area batas cluster)")
@@ -156,5 +156,6 @@ def run_kml_dxf():
              
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
 
 
