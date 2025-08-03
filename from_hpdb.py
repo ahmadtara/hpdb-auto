@@ -8,6 +8,7 @@ import requests
 def run_hpdb(HERE_API_KEY):
 
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot⚡)")
+    st.markdown("<h3 style='font-weight: normal;'>Hai, <b>{}</b> 👋CATATAN PENTING</h3>".format(st.session_state.get("user", "User")), unsafe_allow_html=True)
     st.write(f"Hai, **{st.session_state['user']}** 👋")
 
     if st.button("🔒 Logout"):
@@ -148,3 +149,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
