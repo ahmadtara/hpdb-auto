@@ -67,6 +67,8 @@ def run_kmz_vs_hpdb():
                 if len(name_parts) == 2:
                     block, homenumber = name_parts[0].strip().upper(), name_parts[1].strip()
                     kmz_blocks_homenumbers.add((block, homenumber))
+                else:
+                    st.warning(f"❗ Format salah di placemark: '{h['name']}' (abaikan)")
 
             # Ambil block & homenumber dari XLSX
             xlsx_blocks_homenumbers = set()
@@ -74,7 +76,8 @@ def run_kmz_vs_hpdb():
                 st.error("❌ Kolom 'block' dan 'homenumber' harus ada di template XLSX!")
             else:
                 for _, row in df.iterrows():
-                    block, homenumber = str(row["block"]).strip().upper(), str(row["homenumber"]).strip()
+                    block = str(row["block"]).strip().upper()
+                    homenumber = str(row["homenumber"]).strip()
                     xlsx_blocks_homenumbers.add((block, homenumber))
 
                 # Cek selisih dua set
@@ -85,11 +88,24 @@ def run_kmz_vs_hpdb():
                     st.success("✅ Semua block dan homenumber di XLSX sesuai dengan HP COVER di KMZ!")
                 else:
                     st.error("❌ Ada perbedaan antara XLSX dan HP COVER!")
+
+                    diff_data = []
+
                     if kmz_only:
                         st.warning(f"🔹 Di KMZ (HP COVER) tapi TIDAK ADA di XLSX: {len(kmz_only)} item")
-                        st.code("\n".join([f"{b}.{h}" for b, h in kmz_only]), language="text")
+                        for b, h in kmz_only:
+                            diff_data.append({"block": b, "homenumber": h, "sumber": "KMZ Only"})
+
                     if xlsx_only:
                         st.warning(f"🔸 Di XLSX tapi TIDAK ADA di KMZ (HP COVER): {len(xlsx_only)} item")
-                        st.code("\n".join([f"{b}.{h}" for b, h in xlsx_only]), language="text")
+                        for b, h in xlsx_only:
+                            diff_data.append({"block": b, "homenumber": h, "sumber": "XLSX Only"})
+
+                    diff_df = pd.DataFrame(diff_data)
+                    st.dataframe(diff_df, use_container_width=True)
+
+                    # Download button
+                    csv = diff_df.to_csv(index=False).encode("utf-8")
+                    st.download_button("📥 Download Selisih CSV", data=csv, file_name="selisih_kmz_vs_xlsx.csv", mime="text/csv")
     else:
         st.info("⬆️ Silakan upload file KMZ dan template XLSX terlebih dahulu.")
