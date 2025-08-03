@@ -258,7 +258,7 @@ def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD ")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>obi</span></h2>
-✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
+✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
 1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
 2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
@@ -289,6 +289,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
