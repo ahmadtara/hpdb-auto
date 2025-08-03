@@ -5,7 +5,7 @@ import requests
 # -------------- ✅ KONFIGURASI ---------------- #
 TELEGRAM_TOKEN = "6268660451:AAEm2v-vKcCPrS3SZzIXUMSnN2gJhTYaXuw"
 TELEGRAM_CHAT_ID = "-4024971811"
-HERE_API_KEY = "k1mDEfR1Q3A_MtLqkxLrhbDcS-1oC4r7WzlgPrcv4Rk"
+HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
 
 BOT_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -104,6 +104,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
