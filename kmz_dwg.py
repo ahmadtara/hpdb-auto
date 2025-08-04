@@ -8,7 +8,7 @@ from pyproj import Transformer
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 target_folders = {
-    'FDT', 'FAT', 'HP COVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
+    'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK'
 }
@@ -99,6 +99,8 @@ def classify_items(items):
             classified["FAT"].append(it)
         elif "HP COVER" in folder:
             classified["HP_COVER"].append(it)
+        elif "HP UNCOVER" in folder:
+            classified["HP_COVER"].append(it)  
         elif "NEW POLE" in folder:
             classified["NEW_POLE"].append(it)
         elif "EXISTING" in folder or "EMR" in folder:
@@ -181,14 +183,18 @@ def draw_to_template(classified, template_path):
             x, y = obj['xy']
 
             if layer_name == "HP_COVER":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 6.0,
-                    "layer": "FEATURE_LABEL",
-                    "color": 6,
-                    "insert": (x - 2.2, y - 0.9),
-                    "rotation": 0
-                })
-                continue
+            color_value = 6  # default HP COVER
+            if obj['folder'] == "HP UNCOVER":
+            color_value = 2  # spesifik untuk HP UNCOVER
+            msp.add_text(obj["name"], dxfattribs={
+            "height": 6.0,
+            "layer": "FEATURE_LABEL",
+            "color": color_value,
+            "insert": (x - 2.2, y - 0.9),
+            "rotation": 0
+            })
+            continue
+       
 
             block_name = None
             matchblock = None
@@ -289,6 +295,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
