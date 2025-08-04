@@ -1,13 +1,6 @@
 streamlit
-pandas
-xlsxwriter
-openpyxl
-requests
-geopandas
-shapely
-osmnx
-ezdxf
-lxml
+gspread
+oauth2client
 fastkml
-polyline
-fiona
+shapely
+pandas
