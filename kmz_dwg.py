@@ -4,7 +4,6 @@ import os
 from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
-from shapely.geometry import LineString, Point
 import math
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
@@ -82,6 +81,12 @@ def parse_kml(kml_path):
 def latlon_to_xy(lat, lon):
     return transformer.transform(lon, lat)
 
+def apply_offset(points_xy):
+    xs = [x for x, y in points_xy]
+    ys = [y for x, y in points_xy]
+    cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+    return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
+
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
@@ -113,95 +118,77 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-def get_nearest_angle(point, lines):
+def get_nearest_angle(x, y, all_lines):
     min_dist = float('inf')
-    nearest_segment = None
-    for line in lines:
-        coords = list(line.coords)
+    best_angle = 0.0
+    for path in all_lines:
+        coords = path['xy_path']
         for i in range(len(coords) - 1):
-            seg = LineString([coords[i], coords[i+1]])
-            dist = seg.distance(point)
+            x1, y1 = coords[i]
+            x2, y2 = coords[i + 1]
+            px = x2 - x1
+            py = y2 - y1
+            norm = math.hypot(px, py)
+            if norm == 0:
+                continue
+            t = max(0, min(1, ((x - x1) * px + (y - y1) * py) / (norm * norm)))
+            proj_x = x1 + t * px
+            proj_y = y1 + t * py
+            dist = math.hypot(x - proj_x, y - proj_y)
             if dist < min_dist:
                 min_dist = dist
-                nearest_segment = seg
-    if nearest_segment is None:
-        return 0
-    x1, y1 = nearest_segment.coords[0]
-    x2, y2 = nearest_segment.coords[1]
-    angle_rad = math.atan2(y2 - y1, x2 - x1)
-    angle_deg = math.degrees(angle_rad)
-    return angle_deg
+                best_angle = math.degrees(math.atan2(py, px))
+    return best_angle
 
-def draw_to_template(classified, template_path):
-    doc = ezdxf.readfile(template_path)
+def draw_to_template(doc, classified):
     msp = doc.modelspace()
+    text_height = 2.5
+    text_spacing = 4.5
+    used_positions = set()
 
-    distribution_lines = []
-    for obj in classified.get("DISTRIBUTION_CABLE", []):
-        if obj['type'] == 'path':
-            coords = [latlon_to_xy(lat, lon) for lat, lon in obj['coords']]
-            line = LineString(coords)
-            distribution_lines.append(line)
+    # Konversi path koordinat menjadi xy_path terlebih dahulu
+    for key in classified:
+        for item in classified[key]:
+            if item['type'] == 'path':
+                item['xy_path'] = [latlon_to_xy(lat, lon) for lat, lon in item['coords']]
 
-    placed_text_positions = []
-    min_distance = 2.0
-    vertical_step = 1.5
+    for label in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE", "POLE"]:
+        for item in classified[label]:
+            x, y = latlon_to_xy(item['latitude'], item['longitude'])
 
-    for layer_name, items in classified.items():
-        for obj in items:
-            if obj['type'] == 'point':
-                x, y = latlon_to_xy(obj['latitude'], obj['longitude'])
-                point = Point(x, y)
-                rotation = get_nearest_angle(point, distribution_lines)
-                adjusted_y = y
-                while any(Point(x, adjusted_y).distance(p) < min_distance for p in placed_text_positions):
-                    adjusted_y += vertical_step
-                placed_text_positions.append(Point(x, adjusted_y))
-                msp.add_text(
-                    obj["name"],
-                    dxfattribs={
-                        "height": 6.0,
-                        "layer": "FEATURE_LABEL",
-                        "color": 1,
-                        "insert": (x, adjusted_y),
-                        "rotation": rotation
-                    }
-                )
+            angle = get_nearest_angle(x, y, classified['DISTRIBUTION_CABLE'])
+
+            # offset otomatis bila tabrakan
+            offset_y = 0
+            while (round(x, 1), round(y + offset_y, 1)) in used_positions:
+                offset_y += text_spacing
+            used_positions.add((round(x, 1), round(y + offset_y, 1)))
+
+            msp.add_text(
+                item['name'],
+                dxfattribs={
+                    'height': text_height,
+                    'rotation': angle
+                }
+            ).set_pos((x, y + offset_y))
 
     return doc
 
-def run_kmz_to_dwg():
-    st.title("\U0001F3D7️ KMZ → AUTOCAD ")
-    st.markdown("""
-<h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
-✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
-1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
-2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
-""", unsafe_allow_html=True)
+def run_kmz_to_dwg(kmz_file):
+    with open("temp.kmz", "wb") as f:
+        f.write(kmz_file.read())
+    kml_path = extract_kmz("temp.kmz", "temp")
+    items = parse_kml(kml_path)
+    classified = classify_items(items)
+    doc = ezdxf.new()
+    updated_doc = draw_to_template(doc, classified)
+    output_path = "output.dxf"
+    updated_doc.saveas(output_path)
+    return output_path
 
-    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
-    uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
-
-    if uploaded_kmz and uploaded_template:
-        extract_dir = "temp_kmz"
-        os.makedirs(extract_dir, exist_ok=True)
-        output_dxf = "converted_output.dxf"
-
-        with open("template_ref.dxf", "wb") as f:
-            f.write(uploaded_template.read())
-
-        with st.spinner("🔍 Memproses data..."):
-            try:
-                kml_path = extract_kmz(uploaded_kmz, extract_dir)
-                items = parse_kml(kml_path)
-                classified = classify_items(items)
-                updated_doc = draw_to_template(classified, "template_ref.dxf")
-                if updated_doc:
-                    updated_doc.saveas(output_dxf)
-
-                if os.path.exists(output_dxf):
-                    st.success("✅ Konversi berhasil! DXF sudah dibuat.")
-                    with open(output_dxf, "rb") as f:
-                        st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
-            except Exception as e:
-                st.error(f"❌ Gagal memproses: {e}")
+st.title("KMZ to DXF Converter with Auto Text Rotation")
+uploaded = st.file_uploader("Upload KMZ file", type="kmz")
+if uploaded:
+    output = run_kmz_to_dwg(uploaded)
+    with open(output, "rb") as f:
+        st.download_button("Download DXF", f, file_name="converted.dxf")
