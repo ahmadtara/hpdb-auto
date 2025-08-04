@@ -4,6 +4,8 @@ import os
 from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
+from shapely.geometry import LineString, Point
+import math
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
@@ -117,164 +119,69 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
+def get_nearest_angle(point, lines):
+    min_dist = float('inf')
+    nearest_line = None
+    for line in lines:
+        dist = line.distance(point)
+        if dist < min_dist:
+            min_dist = dist
+            nearest_line = line
+    if nearest_line is None:
+        return 0
+    x1, y1 = nearest_line.coords[0]
+    x2, y2 = nearest_line.coords[-1]
+    angle_rad = math.atan2(y2 - y1, x2 - x1)
+    angle_deg = math.degrees(angle_rad)
+    return angle_deg
+
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
 
-    matchprop_hp = matchprop_pole = matchprop_sr = None
-    matchblock_fat = matchblock_fdt = matchblock_pole = None
+    distribution_lines = []
+    for obj in classified.get("DISTRIBUTION_CABLE", []):
+        if obj['type'] == 'path':
+            coords = [latlon_to_xy(lat, lon) for lat, lon in obj['coords']]
+            line = LineString(coords)
+            distribution_lines.append(line)
 
-    for e in msp:
-        if e.dxftype() == 'TEXT':
-            txt = e.dxf.text.upper()
-            if 'NN-' in txt:
-                matchprop_hp = e.dxf
-            elif 'MR.SRMRW16' in txt:
-                matchprop_pole = e.dxf
-            elif 'SRMRW16.067.B01' in txt:
-                matchprop_sr = e.dxf
-        elif e.dxftype() == 'INSERT':
-            name = e.dxf.name.upper()
-            if name == "FAT":
-                matchblock_fat = e.dxf
-            elif name == "FDT":
-                matchblock_fdt = e.dxf
-            elif name.startswith("A$"):
-                matchblock_pole = e.dxf
+    placed_text_positions = []
+    min_distance = 2.0
+    vertical_step = 1.5
 
-    all_xy = []
-    for layer_name, cat_items in classified.items():
-        for obj in cat_items:
+    for layer_name, items in classified.items():
+        for obj in items:
             if obj['type'] == 'point':
-                all_xy.append(latlon_to_xy(obj['latitude'], obj['longitude']))
-            elif obj['type'] == 'path':
-                all_xy.extend([latlon_to_xy(lat, lon) for lat, lon in obj['coords']])
-
-    if not all_xy:
-        st.error("❌ Tidak ada data dari KMZ!")
-        return None
-
-    shifted_all, (cx, cy) = apply_offset(all_xy)
-
-    idx = 0
-    for layer_name, cat_items in classified.items():
-        for obj in cat_items:
-            if obj['type'] == 'point':
-                obj['xy'] = shifted_all[idx]
-                idx += 1
-            elif obj['type'] == 'path':
-                obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
-                idx += len(obj['coords'])
-
-    layer_mapping = {
-        "BOUNDARY": "FAT AREA",
-        "DISTRIBUTION_CABLE": "FO 36 CORE",
-        "SLING_WIRE": "STRAND UG",
-        "KOTAK": "GARIS HOMEPASS"
-    }
-
-    for layer_name, cat_items in classified.items():
-        true_layer = layer_mapping.get(layer_name, layer_name)
-        for obj in cat_items:
-            if obj['type'] != 'point':
-                msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                continue
-
-            x, y = obj['xy']
-
-            if layer_name == "HP_COVER":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 6.0,
-                    "layer": "FEATURE_LABEL",
-                    "color": 6,
-                    "insert": (x - 2.2, y - 0.9),
-                    "rotation": 0
-                })
-                continue
-
-            elif layer_name == "HP_UNCOVER":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 6.0,
-                    "layer": "FEATURE_LABEL",
-                    "color": 2,
-                    "insert": (x - 2.2, y - 0.9),
-                    "rotation": 0
-                })
-                continue
-
-            block_name = None
-            matchblock = None
-
-            if layer_name == "FAT":
-                block_name = "FAT"
-                matchblock = matchblock_fat
-            elif layer_name == "FDT":
-                block_name = "FDT"
-                matchblock = matchblock_fdt
-            elif layer_name == "NEW_POLE":
-                block_name = "A$C14dd5346"
-                matchblock = matchblock_pole
-            elif layer_name == "EXISTING_POLE":
-                block_name = "A$Cdb6fd7d1" if obj['folder'] in [
-                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
-                ] else "A$C14dd5346"
-                matchblock = matchblock_pole
-
-            inserted_block = False
-            if block_name:
-                try:
-                    scale_x = getattr(matchblock, "xscale", 1.0)
-                    scale_y = getattr(matchblock, "yscale", 1.0)
-                    scale_z = getattr(matchblock, "zscale", 1.0)
-                    if layer_name == "FDT":
-                        scale_x = scale_y = scale_z = 0.0025
-                    msp.add_blockref(
-                        name=block_name,
-                        insert=(x, y),
-                        dxfattribs={
-                            "layer": true_layer,
-                            "xscale": scale_x,
-                            "yscale": scale_y,
-                            "zscale": scale_z,
-                        }
-                    )
-                    inserted_block = True
-                except Exception as e:
-                    print(f"Gagal insert block {block_name}: {e}")
-
-            if not inserted_block:
-                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-
-            if layer_name != "FDT":
-                text_layer = "FEATURE_LABEL" if obj['folder'] in [
-                    "NEW POLE 7-3", "NEW POLE 7-4", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
-                ] else true_layer
-
-                text_color = 1 if text_layer == "FEATURE_LABEL" else 256
-
-                if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"]:
-                    text_height = 5.0
-                else:
-                    text_height = 1.5
-
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": text_height,
-                    "layer": text_layer,
-                    "color": text_color,
-                    "insert": (x + 2, y)
-                })
+                x, y = latlon_to_xy(obj['latitude'], obj['longitude'])
+                point = Point(x, y)
+                rotation = get_nearest_angle(point, distribution_lines)
+                adjusted_y = y
+                while any(Point(x, adjusted_y).distance(p) < min_distance for p in placed_text_positions):
+                    adjusted_y += vertical_step
+                placed_text_positions.append(Point(x, adjusted_y))
+                msp.add_text(
+                    obj["name"],
+                    dxfattribs={
+                        "height": 6.0,
+                        "layer": "FEATURE_LABEL",
+                        "color": 1,
+                        "insert": (x, adjusted_y),
+                        "rotation": rotation
+                    }
+                )
 
     return doc
 
 def run_kmz_to_dwg():
-    st.title("🏗️ KMZ → AUTOCAD ")
+    st.title("\U0001F3D7️ KMZ → AUTOCAD ")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
 1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
 2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
-               
+
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
