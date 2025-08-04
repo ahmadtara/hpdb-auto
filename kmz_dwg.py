@@ -82,12 +82,6 @@ def parse_kml(kml_path):
 def latlon_to_xy(lat, lon):
     return transformer.transform(lon, lat)
 
-def apply_offset(points_xy):
-    xs = [x for x, y in points_xy]
-    ys = [y for x, y in points_xy]
-    cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
-    return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
-
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
@@ -121,16 +115,19 @@ def classify_items(items):
 
 def get_nearest_angle(point, lines):
     min_dist = float('inf')
-    nearest_line = None
+    nearest_segment = None
     for line in lines:
-        dist = line.distance(point)
-        if dist < min_dist:
-            min_dist = dist
-            nearest_line = line
-    if nearest_line is None:
+        coords = list(line.coords)
+        for i in range(len(coords) - 1):
+            seg = LineString([coords[i], coords[i+1]])
+            dist = seg.distance(point)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_segment = seg
+    if nearest_segment is None:
         return 0
-    x1, y1 = nearest_line.coords[0]
-    x2, y2 = nearest_line.coords[-1]
+    x1, y1 = nearest_segment.coords[0]
+    x2, y2 = nearest_segment.coords[1]
     angle_rad = math.atan2(y2 - y1, x2 - x1)
     angle_deg = math.degrees(angle_rad)
     return angle_deg
