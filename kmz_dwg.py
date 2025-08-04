@@ -4,7 +4,6 @@ import os
 from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
-import math
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
@@ -118,77 +117,187 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-def get_nearest_angle(x, y, all_lines):
-    min_dist = float('inf')
-    best_angle = 0.0
-    for path in all_lines:
-        coords = path['xy_path']
-        for i in range(len(coords) - 1):
-            x1, y1 = coords[i]
-            x2, y2 = coords[i + 1]
-            px = x2 - x1
-            py = y2 - y1
-            norm = math.hypot(px, py)
-            if norm == 0:
-                continue
-            t = max(0, min(1, ((x - x1) * px + (y - y1) * py) / (norm * norm)))
-            proj_x = x1 + t * px
-            proj_y = y1 + t * py
-            dist = math.hypot(x - proj_x, y - proj_y)
-            if dist < min_dist:
-                min_dist = dist
-                best_angle = math.degrees(math.atan2(py, px))
-    return best_angle
-
-def draw_to_template(doc, classified):
+def draw_to_template(classified, template_path):
+    doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
-    text_height = 2.5
-    text_spacing = 4.5
-    used_positions = set()
 
-    # Konversi path koordinat menjadi xy_path terlebih dahulu
-    for key in classified:
-        for item in classified[key]:
-            if item['type'] == 'path':
-                item['xy_path'] = [latlon_to_xy(lat, lon) for lat, lon in item['coords']]
+    matchprop_hp = matchprop_pole = matchprop_sr = None
+    matchblock_fat = matchblock_fdt = matchblock_pole = None
 
-    for label in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE", "POLE"]:
-        for item in classified[label]:
-            x, y = latlon_to_xy(item['latitude'], item['longitude'])
+    for e in msp:
+        if e.dxftype() == 'TEXT':
+            txt = e.dxf.text.upper()
+            if 'NN-' in txt:
+                matchprop_hp = e.dxf
+            elif 'MR.SRMRW16' in txt:
+                matchprop_pole = e.dxf
+            elif 'SRMRW16.067.B01' in txt:
+                matchprop_sr = e.dxf
+        elif e.dxftype() == 'INSERT':
+            name = e.dxf.name.upper()
+            if name == "FAT":
+                matchblock_fat = e.dxf
+            elif name == "FDT":
+                matchblock_fdt = e.dxf
+            elif name.startswith("A$"):
+                matchblock_pole = e.dxf
 
-            angle = get_nearest_angle(x, y, classified['DISTRIBUTION_CABLE'])
+    all_xy = []
+    for layer_name, cat_items in classified.items():
+        for obj in cat_items:
+            if obj['type'] == 'point':
+                all_xy.append(latlon_to_xy(obj['latitude'], obj['longitude']))
+            elif obj['type'] == 'path':
+                all_xy.extend([latlon_to_xy(lat, lon) for lat, lon in obj['coords']])
 
-            # offset otomatis bila tabrakan
-            offset_y = 0
-            while (round(x, 1), round(y + offset_y, 1)) in used_positions:
-                offset_y += text_spacing
-            used_positions.add((round(x, 1), round(y + offset_y, 1)))
+    if not all_xy:
+        st.error("❌ Tidak ada data dari KMZ!")
+        return None
 
-            msp.add_text(
-                item['name'],
-                dxfattribs={
-                    'height': text_height,
-                    'rotation': angle
-                }
-            ).set_pos((x, y + offset_y))
+    shifted_all, (cx, cy) = apply_offset(all_xy)
+
+    idx = 0
+    for layer_name, cat_items in classified.items():
+        for obj in cat_items:
+            if obj['type'] == 'point':
+                obj['xy'] = shifted_all[idx]
+                idx += 1
+            elif obj['type'] == 'path':
+                obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
+                idx += len(obj['coords'])
+
+    layer_mapping = {
+        "BOUNDARY": "FAT AREA",
+        "DISTRIBUTION_CABLE": "FO 36 CORE",
+        "SLING_WIRE": "STRAND UG",
+        "KOTAK": "GARIS HOMEPASS"
+    }
+
+    for layer_name, cat_items in classified.items():
+        true_layer = layer_mapping.get(layer_name, layer_name)
+        for obj in cat_items:
+            if obj['type'] != 'point':
+                msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
+                continue
+
+            x, y = obj['xy']
+
+            if layer_name == "HP_COVER":
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": 6.0,
+                    "layer": "FEATURE_LABEL",
+                    "color": 6,
+                    "insert": (x - 2.2, y - 0.9),
+                    "rotation": 0
+                })
+                continue
+
+            elif layer_name == "HP_UNCOVER":
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": 6.0,
+                    "layer": "FEATURE_LABEL",
+                    "color": 2,
+                    "insert": (x - 2.2, y - 0.9),
+                    "rotation": 0
+                })
+                continue
+
+            block_name = None
+            matchblock = None
+
+            if layer_name == "FAT":
+                block_name = "FAT"
+                matchblock = matchblock_fat
+            elif layer_name == "FDT":
+                block_name = "FDT"
+                matchblock = matchblock_fdt
+            elif layer_name == "NEW_POLE":
+                block_name = "A$C14dd5346"
+                matchblock = matchblock_pole
+            elif layer_name == "EXISTING_POLE":
+                block_name = "A$Cdb6fd7d1" if obj['folder'] in [
+                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
+                ] else "A$C14dd5346"
+                matchblock = matchblock_pole
+
+            inserted_block = False
+            if block_name:
+                try:
+                    scale_x = getattr(matchblock, "xscale", 1.0)
+                    scale_y = getattr(matchblock, "yscale", 1.0)
+                    scale_z = getattr(matchblock, "zscale", 1.0)
+                    if layer_name == "FDT":
+                        scale_x = scale_y = scale_z = 0.0025
+                    msp.add_blockref(
+                        name=block_name,
+                        insert=(x, y),
+                        dxfattribs={
+                            "layer": true_layer,
+                            "xscale": scale_x,
+                            "yscale": scale_y,
+                            "zscale": scale_z,
+                        }
+                    )
+                    inserted_block = True
+                except Exception as e:
+                    print(f"Gagal insert block {block_name}: {e}")
+
+            if not inserted_block:
+                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+
+            if layer_name != "FDT":
+                text_layer = "FEATURE_LABEL" if obj['folder'] in [
+                    "NEW POLE 7-3", "NEW POLE 7-4", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
+                ] else true_layer
+
+                text_color = 1 if text_layer == "FEATURE_LABEL" else 256
+
+                if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"]:
+                    text_height = 5.0
+                else:
+                    text_height = 1.5
+
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": text_height,
+                    "layer": text_layer,
+                    "color": text_color,
+                    "insert": (x + 2, y)
+                })
 
     return doc
 
-def run_kmz_to_dwg(kmz_file):
-    with open("temp.kmz", "wb") as f:
-        f.write(kmz_file.read())
-    kml_path = extract_kmz("temp.kmz", "temp")
-    items = parse_kml(kml_path)
-    classified = classify_items(items)
-    doc = ezdxf.new()
-    updated_doc = draw_to_template(doc, classified)
-    output_path = "output.dxf"
-    updated_doc.saveas(output_path)
-    return output_path
+def run_kmz_to_dwg():
+    st.title("🏗️ KMZ → AUTOCAD ")
+    st.markdown("""
+<h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
+✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
+1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
+2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
+""", unsafe_allow_html=True)
+               
+    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
+    uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
-st.title("KMZ to DXF Converter with Auto Text Rotation")
-uploaded = st.file_uploader("Upload KMZ file", type="kmz")
-if uploaded:
-    output = run_kmz_to_dwg(uploaded)
-    with open(output, "rb") as f:
-        st.download_button("Download DXF", f, file_name="converted.dxf")
+    if uploaded_kmz and uploaded_template:
+        extract_dir = "temp_kmz"
+        os.makedirs(extract_dir, exist_ok=True)
+        output_dxf = "converted_output.dxf"
+
+        with open("template_ref.dxf", "wb") as f:
+            f.write(uploaded_template.read())
+
+        with st.spinner("🔍 Memproses data..."):
+            try:
+                kml_path = extract_kmz(uploaded_kmz, extract_dir)
+                items = parse_kml(kml_path)
+                classified = classify_items(items)
+                updated_doc = draw_to_template(classified, "template_ref.dxf")
+                if updated_doc:
+                    updated_doc.saveas(output_dxf)
+
+                if os.path.exists(output_dxf):
+                    st.success("✅ Konversi berhasil! DXF sudah dibuat.")
+                    with open(output_dxf, "rb") as f:
+                        st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
+            except Exception as e:
+                st.error(f"❌ Gagal memproses: {e}")
