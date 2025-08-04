@@ -88,7 +88,7 @@ def apply_offset(points_xy):
 
 def classify_items(items):
     classified = {name: [] for name in [
-        "FDT", "FAT", "HP_COVER", "NEW_POLE", "EXISTING_POLE", "POLE",
+        "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
         "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK"
     ]}
     for it in items:
@@ -100,7 +100,7 @@ def classify_items(items):
         elif "HP COVER" in folder:
             classified["HP_COVER"].append(it)
         elif "HP UNCOVER" in folder:
-            classified["HP_UNCOVER"].append(it)  
+            classified["HP_UNCOVER"].append(it)
         elif "NEW POLE" in folder:
             classified["NEW_POLE"].append(it)
         elif "EXISTING" in folder or "EMR" in folder:
@@ -182,26 +182,25 @@ def draw_to_template(classified, template_path):
 
             x, y = obj['xy']
 
-if layer_name == "HP_COVER":
-    msp.add_text(obj["name"], dxfattribs={
-        "height": 6.0,
-        "layer": "FEATURE_LABEL",
-        "color": 6,
-        "insert": (x - 2.2, y - 0.9),
-        "rotation": 0
-    })
-    continue
+            if layer_name == "HP_COVER":
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": 6.0,
+                    "layer": "FEATURE_LABEL",
+                    "color": 6,
+                    "insert": (x - 2.2, y - 0.9),
+                    "rotation": 0
+                })
+                continue
 
-elif layer_name == "HP_UNCOVER":
-    msp.add_text(obj["name"], dxfattribs={
-        "height": 6.0,
-        "layer": "FEATURE_LABEL",
-        "color": 2,  # kuning
-        "insert": (x - 2.2, y - 0.9),
-        "rotation": 0
-    })
-    continue
-       
+            elif layer_name == "HP_UNCOVER":
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": 6.0,
+                    "layer": "FEATURE_LABEL",
+                    "color": 2,
+                    "insert": (x - 2.2, y - 0.9),
+                    "rotation": 0
+                })
+                continue
 
             block_name = None
             matchblock = None
@@ -302,10 +301,3 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
-
-
-
-
-
-
-
