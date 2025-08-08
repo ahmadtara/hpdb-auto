@@ -113,6 +113,8 @@ def classify_items(items):
             classified["SLING_WIRE"].append(it)
         elif "KOTAK" in folder:
             classified["KOTAK"].append(it)
+        elif "JALAN" in folder:
+            classified["JALAN"].append(it)
         else:
             classified["POLE"].append(it)
     return classified
@@ -302,4 +304,5 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
