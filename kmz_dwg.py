@@ -10,7 +10,7 @@ transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 target_folders = {
     'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
-    'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK'
+    'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
 def extract_kmz(kmz_path, extract_dir):
@@ -89,7 +89,7 @@ def apply_offset(points_xy):
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
-        "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK"
+        "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
     for it in items:
         folder = it['folder']
@@ -170,7 +170,8 @@ def draw_to_template(classified, template_path):
         "BOUNDARY": "FAT AREA",
         "DISTRIBUTION_CABLE": "FO 36 CORE",
         "SLING_WIRE": "STRAND UG",
-        "KOTAK": "GARIS HOMEPASS"
+        "KOTAK": "GARIS HOMEPASS",
+        "JALAN": "JALAN"
     }
 
     for layer_name, cat_items in classified.items():
@@ -301,3 +302,4 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
