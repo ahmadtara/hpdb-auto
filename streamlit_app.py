@@ -53,7 +53,7 @@ threading.Thread(target=monitor_telegram, daemon=True).start()
 # -------------- ✅ LOGIN FORM ---------------- #
 def login_page():
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png/960px-MyRepublic_NEW_LOGO_%28September_2023%29_Logo_MyRepublic_Horizontal_-_Black_%281%29.png", width=300)
-    st.markdown("## 🔐 Login to MyRepublic Toolkit ⚡ By A.Tara-P.")
+    st.markdown("## 🔐 Login to Teknologia ⚡")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
@@ -104,6 +104,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
