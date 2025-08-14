@@ -11,7 +11,7 @@ TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
 
 # =====================
-# CLASSIFY ROAD LAYERS
+# ROAD WIDTH/LAYER
 # =====================
 def classify_layer(hwy):
     if hwy in ['motorway', 'trunk', 'primary']:
@@ -25,39 +25,79 @@ def classify_layer(hwy):
     return 'OTHER', DEFAULT_WIDTH
 
 # =====================
-# LOAD POLYGON FROM KML
+# HELPERS
+# =====================
+def ensure_wgs84_polygon(polygon, crs_hint):
+    """
+    Pastikan polygon untuk query OSM adalah EPSG:4326 (lon, lat).
+    Bila KML tidak punya CRS (None), anggap EPSG:4326 (standar KML).
+    """
+    src_crs = crs_hint if crs_hint is not None else "EPSG:4326"
+    poly_ll = gpd.GeoSeries([polygon], crs=src_crs).to_crs("EPSG:4326").iloc[0]
+    return poly_ll
+
+# =====================
+# LOAD POLYGON FROM KML/KMZ
 # =====================
 def extract_polygon_from_kml(kml_path):
     gdf = gpd.read_file(kml_path)
+    # Ambil hanya Polygon/MultiPolygon
     polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
     if polygons.empty:
         raise Exception("No Polygon found in KML")
-    return unary_union(polygons.geometry), polygons.crs
+    # Union semua polygon
+    poly_union = unary_union(polygons.geometry)
+    # CRS dari driver KML kadang None → fallback ke EPSG:4326 (standar KML/WGS84)
+    return poly_union, (polygons.crs if polygons.crs is not None else "EPSG:4326")
 
 # =====================
-# GET ROADS FROM OSM
+# GET ROADS FROM OSM (tahan banting)
 # =====================
-def get_osm_roads(polygon):
+def get_osm_roads(polygon, polygon_crs):
+    poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
     tags = {"highway": True}
-    roads = ox.features_from_polygon(polygon, tags=tags)
+    try:
+        roads = ox.features_from_polygon(poly_ll, tags=tags)
+    except Exception:
+        # Gagal/No matching features → kembalikan GDF kosong
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
+    if roads.empty:
+        return roads
+
     roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
+    if roads.empty:
+        return roads
+
     roads = roads.explode(index_parts=False)
     roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
-    roads = roads.clip(polygon)
+    # clip berdasarkan polygon lon/lat
+    roads = roads.clip(poly_ll)
     roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
     roads = roads.reset_index(drop=True)
     return roads
 
 # =====================
-# GET BUILDINGS FROM OSM
+# GET BUILDINGS FROM OSM (bounding box saja)
 # =====================
-def get_osm_buildings(polygon):
+def get_osm_buildings(polygon, polygon_crs):
+    poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
     tags = {"building": True}
-    buildings = ox.features_from_polygon(polygon, tags=tags)
+    try:
+        buildings = ox.features_from_polygon(poly_ll, tags=tags)
+    except Exception:
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
+    if buildings.empty:
+        return buildings
+
     buildings = buildings[buildings.geometry.type.isin(["Polygon", "MultiPolygon"])]
+    if buildings.empty:
+        return buildings
+
     buildings = buildings.explode(index_parts=False)
     buildings = buildings[~buildings.geometry.is_empty & buildings.geometry.notnull()]
-    buildings = buildings.clip(polygon)
+    buildings = buildings.clip(poly_ll)
     buildings = buildings.reset_index(drop=True)
     return buildings
 
@@ -65,13 +105,16 @@ def get_osm_buildings(polygon):
 # REMOVE Z COORDS
 # =====================
 def strip_z(geom):
-    if geom.geom_type == "LineString" and geom.has_z:
+    if geom.geom_type == "LineString" and hasattr(geom, "has_z") and geom.has_z:
         return LineString([(x, y) for x, y, *_ in geom.coords])
     elif geom.geom_type == "MultiLineString":
-        return MultiLineString([
-            LineString([(x, y) for x, y, *_ in line.coords]) if line.has_z else line
-            for line in geom.geoms
-        ])
+        new_geoms = []
+        for line in geom.geoms:
+            if hasattr(line, "has_z") and line.has_z:
+                new_geoms.append(LineString([(x, y) for x, y, *_ in line.coords]))
+            else:
+                new_geoms.append(line)
+        return MultiLineString(new_geoms)
     return geom
 
 # =====================
@@ -81,30 +124,30 @@ def add_buildings_to_dxf(msp, buildings, min_x, min_y):
     for geom in buildings.geometry:
         if geom.is_empty:
             continue
-        bbox = geom.bounds  # (minx, miny, maxx, maxy)
-        rect = box(*bbox)
+        minx, miny, maxx, maxy = geom.bounds
+        rect = box(minx, miny, maxx, maxy)
         coords = [(x - min_x, y - min_y) for x, y in rect.exterior.coords]
         msp.add_lwpolyline(coords, dxfattribs={"layer": "BUILDINGS"})
 
 # =====================
 # EXPORT TO DXF
 # =====================
-def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None, buildings=None):
+def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings=None):
     doc = ezdxf.new()
     msp = doc.modelspace()
 
+    # --- Buffer jalan jadi "area" lalu ambil outline agar jadi polylines rapi ---
     all_buffers = []
 
-    for _, row in gdf.iterrows():
+    for _, row in gdf_roads.iterrows():
         geom = strip_z(row.geometry)
         hwy = str(row.get("highway", ""))
-        layer, width = classify_layer(hwy)
+        _, width = classify_layer(hwy)
 
         if geom.is_empty or not geom.is_valid:
             continue
 
         merged = geom if isinstance(geom, LineString) else linemerge(geom)
-
         if isinstance(merged, (LineString, MultiLineString)):
             buffered = merged.buffer(width / 2, resolution=8, join_style=2)
             all_buffers.append(buffered)
@@ -121,12 +164,12 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None, buildings=None)
     min_x = min(x for x, y in bounds)
     min_y = min(y for x, y in bounds)
 
-    # Tambahkan ROADS
+    # ROADS
     for outline in outlines:
         coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
         msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
 
-    # Tambahkan BOUNDARY
+    # BOUNDARY
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
         if poly.geom_type == 'Polygon':
@@ -137,7 +180,7 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None, buildings=None)
                 coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
                 msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
 
-    # Tambahkan BUILDINGS (kotak bounding box)
+    # BUILDINGS as boxes
     if buildings is not None and not buildings.empty:
         add_buildings_to_dxf(msp, buildings, min_x, min_y)
 
@@ -150,18 +193,29 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None, buildings=None)
 def process_kml_to_dxf(kml_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     polygon, polygon_crs = extract_polygon_from_kml(kml_path)
-    
-    roads = get_osm_roads(polygon)
-    buildings = get_osm_buildings(polygon)
 
+    # Ambil dari OSM (di WGS84), baru nanti di-CRS ke UTM untuk ekspor
+    roads = get_osm_roads(polygon, polygon_crs)
+    buildings = get_osm_buildings(polygon, polygon_crs)
+
+    # File keluaran
     geojson_path = os.path.join(output_dir, "roadmap_osm.geojson")
     dxf_path = os.path.join(output_dir, "roadmap_osm.dxf")
 
     if not roads.empty:
         roads_utm = roads.to_crs(TARGET_EPSG)
-        buildings_utm = buildings.to_crs(TARGET_EPSG) if not buildings.empty else None
+        buildings_utm = buildings.to_crs(TARGET_EPSG) if (buildings is not None and not buildings.empty) else None
+
+        # Simpan roads ke GeoJSON untuk inspeksi
         roads_utm.to_file(geojson_path, driver="GeoJSON")
-        export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs, buildings=buildings_utm)
+
+        export_to_dxf(
+            roads_utm,
+            dxf_path,
+            polygon=polygon,
+            polygon_crs=polygon_crs,
+            buildings=buildings_utm
+        )
         return dxf_path, geojson_path, True
     else:
         raise Exception("Tidak ada jalan ditemukan di dalam area polygon.")
@@ -182,14 +236,13 @@ def extract_kmz_to_kml(kmz_path, extract_dir):
 # STREAMLIT UI
 # =====================
 def run_kml_dxf():
-    st.title("🌍 KML/KMZ → Buat Jalan & Bangunan dari Boundary Cluster")
+    st.title("🌍 KML/KMZ → Jalan & Kotak Bangunan dari Boundary")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
-1️⃣ Format file boleh `.KML` langsung atau `.KMZ`.<br>
-2️⃣ Jika `.KMZ`, sistem akan otomatis ekstrak `.KML` utama di dalamnya.<br>
-3️⃣ Jalan akan dibuat otomatis berdasarkan boundary cluster.<br>
-4️⃣ Bangunan akan digambar sebagai kotak bounding box di layer `BUILDINGS`.<br><br>
+1️⃣ Boleh upload `.KML` atau `.KMZ`.<br>
+2️⃣ Sistem pastikan polygon ke EPSG:4326 sebelum query OSM (hindari error).<br>
+3️⃣ Bangunan digambar sebagai kotak (bounding box) di layer <code>BUILDINGS</code>.<br><br>
 """, unsafe_allow_html=True)
 
     st.caption("Upload file .KML atau .KMZ (area batas cluster)")
