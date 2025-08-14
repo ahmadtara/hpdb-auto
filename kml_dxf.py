@@ -7,6 +7,7 @@ import ezdxf
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, box
 from shapely.ops import unary_union, linemerge, snap, polygonize
 import osmnx as ox
+from shapely import wkt
 
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
@@ -120,6 +121,16 @@ def load_google_buildings(csv_gz_path, polygon=None, polygon_crs="EPSG:4326"):
     return gdf
 
 # =====================
+# LOAD CSV GEO
+# =====================
+def load_csv_to_gdf(csv_path, geom_col="geometry", crs="EPSG:4326"):
+    df = pd.read_csv(csv_path)
+    if geom_col not in df.columns:
+        raise Exception(f"CSV tidak ada kolom geometry bernama {geom_col}")
+    gdf = gpd.GeoDataFrame(df, geometry=df[geom_col].apply(wkt.loads), crs=crs)
+    return gdf
+
+# =====================
 # STRIP Z
 # =====================
 def strip_z(geom):
@@ -163,19 +174,18 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
         if isinstance(merged, (LineString, MultiLineString)):
             buffered = merged.buffer(width / 2, resolution=8, join_style=2)
             all_buffers.append(buffered)
-    if not all_buffers:
-        raise Exception("❌ Tidak ada garis valid untuk diekspor.")
-    all_union = unary_union(all_buffers)
-    outlines = list(polygonize(all_union.boundary))
-    if not outlines:
-        raise Exception("❌ Polygonize gagal menghasilkan outline.")
-    bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
-    min_x = min(x for x, y in bounds)
-    min_y = min(y for x, y in bounds)
-    # ROADS
-    for outline in outlines:
-        coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
-        msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
+    if all_buffers:
+        all_union = unary_union(all_buffers)
+        outlines = list(polygonize(all_union.boundary))
+        bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
+        min_x = min(x for x, y in bounds)
+        min_y = min(y for x, y in bounds)
+        # ROADS
+        for outline in outlines:
+            coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
+            msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
+    else:
+        min_x = min_y = 0
     # BOUNDARY
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
@@ -193,7 +203,7 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
     doc.saveas(dxf_path)
 
 # =====================
-# PROSES UTAMA
+# PROSES UTAMA KML → DXF
 # =====================
 def process_kml_to_dxf(kml_path, output_dir, google_building_csv=None):
     os.makedirs(output_dir, exist_ok=True)
@@ -218,19 +228,22 @@ def process_kml_to_dxf(kml_path, output_dir, google_building_csv=None):
 # STREAMLIT
 # =====================
 def run_kml_dxf():
-    st.title("🌍 KML/KMZ → Jalan & Kotak Bangunan dari Boundary")
+    st.title("🌍 KML/KMZ/CSV → Jalan & Kotak Bangunan dari Boundary")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
 1️⃣ Boleh upload `.KML` atau `.KMZ`.<br>
-2️⃣ Sistem pastikan polygon ke EPSG:4326 sebelum query OSM.<br>
-3️⃣ Bangunan digambar sebagai kotak (bounding box) di layer <code>BUILDINGS</code>.<br>
-4️⃣ Bisa juga upload Google Open Buildings CSV (.csv.gz) jika OSM kosong.<br><br>
+2️⃣ Atau upload CSV (WKT geometry).<br>
+3️⃣ Sistem pastikan polygon ke EPSG:4326 sebelum query OSM.<br>
+4️⃣ Bangunan digambar sebagai kotak (bounding box) di layer <code>BUILDINGS</code>.<br>
+5️⃣ Bisa juga upload Google Open Buildings CSV (.csv.gz) jika OSM kosong.<br><br>
 """, unsafe_allow_html=True)
 
     kml_file = st.file_uploader("Upload file .KML atau .KMZ", type=["kml", "kmz"])
     google_csv = st.file_uploader("Opsional: Upload Google Open Buildings CSV (.csv.gz)", type=["csv.gz"])
+    csv_file = st.file_uploader("Atau upload CSV langsung (WKT geometry)", type=["csv"])
 
+    # ==== KML / KMZ ====
     if kml_file:
         with st.spinner("💫 Memproses file..."):
             try:
@@ -245,6 +258,24 @@ def run_kml_dxf():
                     st.success("✅ Berhasil diekspor ke DXF!")
                     with open(dxf_path, "rb") as f:
                         st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_osm.dxf")
+            except Exception as e:
+                st.error(f"❌ Terjadi kesalahan: {e}")
+
+    # ==== CSV ====
+    if csv_file:
+        with st.spinner("💫 Memproses CSV..."):
+            try:
+                temp_csv = f"/tmp/{csv_file.name}"
+                with open(temp_csv, "wb") as f:
+                    f.write(csv_file.read())
+                gdf = load_csv_to_gdf(temp_csv)
+                output_dir = "/tmp/output_csv"
+                os.makedirs(output_dir, exist_ok=True)
+                dxf_path = os.path.join(output_dir, "from_csv.dxf")
+                export_to_dxf(gdf_roads=gdf, dxf_path=dxf_path, buildings=gdf)
+                st.success("✅ CSV berhasil diekspor ke DXF!")
+                with open(dxf_path, "rb") as f:
+                    st.download_button("⬇️ Download DXF", data=f, file_name="from_csv.dxf")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
 
