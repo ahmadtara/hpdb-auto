@@ -11,6 +11,7 @@ from shapely import wkt
 
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
+MAX_CSV_ROWS = 50000  # batasi row CSV agar tidak crash
 
 # =====================
 # LAYER / WIDTH
@@ -43,8 +44,6 @@ def extract_polygon_from_kml(kml_path):
     if polygons.empty:
         raise Exception("No Polygon found in KML")
     poly_union = unary_union(polygons.geometry)
-    # simplify geometry to prevent linemerge errors
-    poly_union = poly_union.simplify(0.00001, preserve_topology=True)
     return poly_union, (polygons.crs if polygons.crs is not None else "EPSG:4326")
 
 # =====================
@@ -61,7 +60,6 @@ def extract_kmz_to_kml(kmz_path, extract_dir):
 # =====================
 # OSM ROADS
 # =====================
-@st.cache_data
 def get_osm_roads(polygon, polygon_crs):
     poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
     tags = {"highway": True}
@@ -79,14 +77,11 @@ def get_osm_roads(polygon, polygon_crs):
     roads = roads.clip(poly_ll)
     roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
     roads = roads.reset_index(drop=True)
-    # simplify lines to reduce processing
-    roads["geometry"] = roads["geometry"].apply(lambda g: g.simplify(0.5, preserve_topology=True))
     return roads
 
 # =====================
 # OSM BUILDINGS
 # =====================
-@st.cache_data
 def get_osm_buildings(polygon, polygon_crs):
     poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
     tags = {"building": True}
@@ -103,8 +98,6 @@ def get_osm_buildings(polygon, polygon_crs):
     buildings = buildings[~buildings.geometry.is_empty & buildings.geometry.notnull()]
     buildings = buildings.clip(poly_ll)
     buildings = buildings.reset_index(drop=True)
-    # simplify building polygons
-    buildings["geometry"] = buildings["geometry"].apply(lambda g: g.simplify(0.5, preserve_topology=True))
     return buildings
 
 # =====================
@@ -129,13 +122,15 @@ def load_google_buildings(csv_gz_path, polygon=None, polygon_crs="EPSG:4326"):
     return gdf
 
 # =====================
-# LOAD CSV GEO
+# LOAD CSV GEO DENGAN CACHE
 # =====================
-def load_csv_to_gdf(csv_path, geom_col="geometry", crs="EPSG:4326"):
-    df = pd.read_csv(csv_path)
-    if geom_col not in df.columns:
-        raise Exception(f"CSV tidak ada kolom geometry bernama {geom_col}")
-    gdf = gpd.GeoDataFrame(df, geometry=df[geom_col].apply(wkt.loads), crs=crs)
+@st.cache_data
+def load_csv_safe(csv_file):
+    temp_csv = f"/tmp/{csv_file.name}"
+    with open(temp_csv, "wb") as f:
+        f.write(csv_file.read())
+    df = pd.read_csv(temp_csv, nrows=MAX_CSV_ROWS)
+    gdf = gpd.GeoDataFrame(df, geometry=df['geometry'].apply(wkt.loads), crs="EPSG:4326")
     return gdf
 
 # =====================
@@ -180,10 +175,8 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
         if geom.is_empty or not geom.is_valid:
             continue
 
-        # SAFE MERGE & SIMPLIFY
         if isinstance(geom, (LineString, MultiLineString)):
-            merged = linemerge(geom) if isinstance(geom, MultiLineString) else geom
-            merged = merged.simplify(0.5, preserve_topology=True)
+            merged = geom if isinstance(geom, LineString) else linemerge(geom)
             buffered = merged.buffer(width / 2, resolution=8, join_style=2)
             all_buffers.append(buffered)
         elif isinstance(geom, (Polygon, MultiPolygon)):
@@ -201,7 +194,6 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
     else:
         min_x = min_y = 0
 
-    # BOUNDARY
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
         if poly.geom_type == 'Polygon':
@@ -212,7 +204,6 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
                 coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
                 msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
 
-    # BUILDINGS
     if buildings is not None and not buildings.empty:
         add_buildings_to_dxf(msp, buildings, min_x, min_y)
 
@@ -220,7 +211,7 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
     doc.saveas(dxf_path)
 
 # =====================
-# PROSES UTAMA KML → DXF
+# PROSES KML → DXF
 # =====================
 def process_kml_to_dxf(kml_path, output_dir, google_building_csv=None):
     os.makedirs(output_dir, exist_ok=True)
@@ -262,41 +253,36 @@ def run_kml_dxf():
 
     # ==== KML / KMZ ====
     if kml_file:
-        if st.button("Mulai Proses KML/KMZ"):
-            with st.spinner("💫 Memproses file..."):
-                try:
-                    temp_input = f"/tmp/{kml_file.name}"
-                    with open(temp_input, "wb") as f:
-                        f.write(kml_file.read())
-                    if temp_input.lower().endswith(".kmz"):
-                        temp_input = extract_kmz_to_kml(temp_input, "/tmp")
-                    output_dir = "/tmp/output"
-                    dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir, google_building_csv=google_csv)
-                    if ok:
-                        st.success("✅ Berhasil diekspor ke DXF!")
-                        with open(dxf_path, "rb") as f:
-                            st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_osm.dxf")
-                except Exception as e:
-                    st.error(f"❌ Terjadi kesalahan: {e}")
+        with st.spinner("💫 Memproses file..."):
+            try:
+                temp_input = f"/tmp/{kml_file.name}"
+                with open(temp_input, "wb") as f:
+                    f.write(kml_file.read())
+                if temp_input.lower().endswith(".kmz"):
+                    temp_input = extract_kmz_to_kml(temp_input, "/tmp")
+                output_dir = "/tmp/output"
+                dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir, google_building_csv=google_csv)
+                if ok:
+                    st.success("✅ Berhasil diekspor ke DXF!")
+                    with open(dxf_path, "rb") as f:
+                        st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_osm.dxf")
+            except Exception as e:
+                st.error(f"❌ Terjadi kesalahan: {e}")
 
     # ==== CSV ====
     if csv_file:
-        if st.button("Mulai Proses CSV"):
-            with st.spinner("💫 Memproses CSV..."):
-                try:
-                    temp_csv = f"/tmp/{csv_file.name}"
-                    with open(temp_csv, "wb") as f:
-                        f.write(csv_file.read())
-                    gdf = load_csv_to_gdf(temp_csv)
-                    output_dir = "/tmp/output_csv"
-                    os.makedirs(output_dir, exist_ok=True)
-                    dxf_path = os.path.join(output_dir, "from_csv.dxf")
-                    export_to_dxf(gdf_roads=gdf, dxf_path=dxf_path, buildings=gdf)
-                    st.success("✅ CSV berhasil diekspor ke DXF!")
-                    with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download DXF", data=f, file_name="from_csv.dxf")
-                except Exception as e:
-                    st.error(f"❌ Terjadi kesalahan: {e}")
+        with st.spinner("💫 Memproses CSV..."):
+            try:
+                gdf = load_csv_safe(csv_file)
+                output_dir = "/tmp/output_csv"
+                os.makedirs(output_dir, exist_ok=True)
+                dxf_path = os.path.join(output_dir, "from_csv.dxf")
+                export_to_dxf(gdf_roads=gdf, dxf_path=dxf_path, buildings=gdf)
+                st.success("✅ CSV berhasil diekspor ke DXF!")
+                with open(dxf_path, "rb") as f:
+                    st.download_button("⬇️ Download DXF", data=f, file_name="from_csv.dxf")
+            except Exception as e:
+                st.error(f"❌ Terjadi kesalahan: {e}")
 
 # =====================
 # RUN APP
