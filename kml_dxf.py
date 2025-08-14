@@ -3,13 +3,16 @@ import zipfile
 import geopandas as gpd
 import streamlit as st
 import ezdxf
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
+from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, box
 from shapely.ops import unary_union, linemerge, snap, polygonize
 import osmnx as ox
 
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
 
+# =====================
+# CLASSIFY ROAD LAYERS
+# =====================
 def classify_layer(hwy):
     if hwy in ['motorway', 'trunk', 'primary']:
         return 'HIGHWAYS', 10
@@ -21,6 +24,9 @@ def classify_layer(hwy):
         return 'PATHS', 10
     return 'OTHER', DEFAULT_WIDTH
 
+# =====================
+# LOAD POLYGON FROM KML
+# =====================
 def extract_polygon_from_kml(kml_path):
     gdf = gpd.read_file(kml_path)
     polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
@@ -28,6 +34,9 @@ def extract_polygon_from_kml(kml_path):
         raise Exception("No Polygon found in KML")
     return unary_union(polygons.geometry), polygons.crs
 
+# =====================
+# GET ROADS FROM OSM
+# =====================
 def get_osm_roads(polygon):
     tags = {"highway": True}
     roads = ox.features_from_polygon(polygon, tags=tags)
@@ -39,6 +48,22 @@ def get_osm_roads(polygon):
     roads = roads.reset_index(drop=True)
     return roads
 
+# =====================
+# GET BUILDINGS FROM OSM
+# =====================
+def get_osm_buildings(polygon):
+    tags = {"building": True}
+    buildings = ox.features_from_polygon(polygon, tags=tags)
+    buildings = buildings[buildings.geometry.type.isin(["Polygon", "MultiPolygon"])]
+    buildings = buildings.explode(index_parts=False)
+    buildings = buildings[~buildings.geometry.is_empty & buildings.geometry.notnull()]
+    buildings = buildings.clip(polygon)
+    buildings = buildings.reset_index(drop=True)
+    return buildings
+
+# =====================
+# REMOVE Z COORDS
+# =====================
 def strip_z(geom):
     if geom.geom_type == "LineString" and geom.has_z:
         return LineString([(x, y) for x, y, *_ in geom.coords])
@@ -49,7 +74,22 @@ def strip_z(geom):
         ])
     return geom
 
-def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
+# =====================
+# ADD BUILDINGS AS BOXES
+# =====================
+def add_buildings_to_dxf(msp, buildings, min_x, min_y):
+    for geom in buildings.geometry:
+        if geom.is_empty:
+            continue
+        bbox = geom.bounds  # (minx, miny, maxx, maxy)
+        rect = box(*bbox)
+        coords = [(x - min_x, y - min_y) for x, y in rect.exterior.coords]
+        msp.add_lwpolyline(coords, dxfattribs={"layer": "BUILDINGS"})
+
+# =====================
+# EXPORT TO DXF
+# =====================
+def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None, buildings=None):
     doc = ezdxf.new()
     msp = doc.modelspace()
 
@@ -81,10 +121,12 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     min_x = min(x for x, y in bounds)
     min_y = min(y for x, y in bounds)
 
+    # Tambahkan ROADS
     for outline in outlines:
         coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
         msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
 
+    # Tambahkan BOUNDARY
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
         if poly.geom_type == 'Polygon':
@@ -95,25 +137,38 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
                 coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
                 msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
 
+    # Tambahkan BUILDINGS (kotak bounding box)
+    if buildings is not None and not buildings.empty:
+        add_buildings_to_dxf(msp, buildings, min_x, min_y)
+
     doc.set_modelspace_vport(height=10000)
     doc.saveas(dxf_path)
 
+# =====================
+# MAIN PROCESS
+# =====================
 def process_kml_to_dxf(kml_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     polygon, polygon_crs = extract_polygon_from_kml(kml_path)
+    
     roads = get_osm_roads(polygon)
+    buildings = get_osm_buildings(polygon)
 
     geojson_path = os.path.join(output_dir, "roadmap_osm.geojson")
     dxf_path = os.path.join(output_dir, "roadmap_osm.dxf")
 
     if not roads.empty:
         roads_utm = roads.to_crs(TARGET_EPSG)
+        buildings_utm = buildings.to_crs(TARGET_EPSG) if not buildings.empty else None
         roads_utm.to_file(geojson_path, driver="GeoJSON")
-        export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs)
+        export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs, buildings=buildings_utm)
         return dxf_path, geojson_path, True
     else:
         raise Exception("Tidak ada jalan ditemukan di dalam area polygon.")
 
+# =====================
+# KMZ EXTRACT
+# =====================
 def extract_kmz_to_kml(kmz_path, extract_dir):
     """Ekstrak file .kml pertama dari .kmz"""
     with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
@@ -123,14 +178,18 @@ def extract_kmz_to_kml(kmz_path, extract_dir):
         kmz_file.extract(kml_files[0], extract_dir)
         return os.path.join(extract_dir, kml_files[0])
 
+# =====================
+# STREAMLIT UI
+# =====================
 def run_kml_dxf():
-    st.title("🌍 KML/KMZ → Buat Jalan Bedasarkan Boundry Cluster")
+    st.title("🌍 KML/KMZ → Buat Jalan & Bangunan dari Boundary Cluster")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
-1️⃣ Format file boleh `.KML` langsung atau `.KMZ` (KML di dalam ZIP).<br>
+1️⃣ Format file boleh `.KML` langsung atau `.KMZ`.<br>
 2️⃣ Jika `.KMZ`, sistem akan otomatis ekstrak `.KML` utama di dalamnya.<br>
-3️⃣ Jalan akan dibuat otomatis berdasarkan boundary cluster.<br><br>
+3️⃣ Jalan akan dibuat otomatis berdasarkan boundary cluster.<br>
+4️⃣ Bangunan akan digambar sebagai kotak bounding box di layer `BUILDINGS`.<br><br>
 """, unsafe_allow_html=True)
 
     st.caption("Upload file .KML atau .KMZ (area batas cluster)")
@@ -153,11 +212,13 @@ def run_kml_dxf():
                 if ok:
                     st.success("✅ Berhasil diekspor ke DXF!")
                     with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download Jalan Autocad UTM 60", data=f, file_name="roadmap_osm.dxf")
+                        st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_osm.dxf")
 
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
 
-# Jalankan aplikasi
+# =====================
+# RUN APP
+# =====================
 if __name__ == "__main__":
     run_kml_dxf()
