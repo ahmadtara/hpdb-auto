@@ -1,126 +1,87 @@
 import os
-import zipfile
+import streamlit as st
 import pandas as pd
 import geopandas as gpd
-import streamlit as st
 import ezdxf
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, box
+from shapely.geometry import Point, box, LineString, MultiLineString
 from shapely.ops import unary_union, linemerge, snap, polygonize
-import osmnx as ox
+import gdown  # pip install gdown
 
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
 
-# =====================
-# LAYER / WIDTH
-# =====================
-def classify_layer(hwy):
-    if hwy in ['motorway', 'trunk', 'primary']:
-        return 'HIGHWAYS', 10
-    elif hwy in ['secondary', 'tertiary']:
-        return 'MAJOR_ROADS', 10
-    elif hwy in ['residential', 'unclassified', 'service']:
-        return 'MINOR_ROADS', 10
-    elif hwy in ['footway', 'path', 'cycleway']:
-        return 'PATHS', 10
-    return 'OTHER', DEFAULT_WIDTH
+# ---------------------
+# Batas Pekanbaru (lon/lat EPSG:4326)
+# ---------------------
+PEKANBARU_BBOX = {
+    "min_lon": 101.35,
+    "max_lon": 101.55,
+    "min_lat": 0.50,
+    "max_lat": 0.65
+}
 
 # =====================
-# HELPER CRS
+# Load Google Open Buildings CSV via local file or Google Drive link
 # =====================
-def ensure_wgs84_polygon(polygon, crs_hint):
-    src_crs = crs_hint if crs_hint is not None else "EPSG:4326"
-    poly_ll = gpd.GeoSeries([polygon], crs=src_crs).to_crs("EPSG:4326").iloc[0]
-    return poly_ll
+def load_google_buildings(csv_path_or_url):
+    # Download dari Google Drive jika url
+    if csv_path_or_url.startswith("http"):
+        temp_file = "/tmp/building.csv.gz"
+        gdown.download(csv_path_or_url, temp_file, quiet=False)
+        csv_path_or_url = temp_file
 
-# =====================
-# EXTRACT POLYGON KML
-# =====================
-def extract_polygon_from_kml(kml_path):
-    gdf = gpd.read_file(kml_path)
-    polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
-    if polygons.empty:
-        raise Exception("No Polygon found in KML")
-    poly_union = unary_union(polygons.geometry)
-    return poly_union, (polygons.crs if polygons.crs is not None else "EPSG:4326")
+    chunksize = 200_000
+    gdf_list = []
 
-# =====================
-# EXTRACT KMZ → KML
-# =====================
-def extract_kmz_to_kml(kmz_path, extract_dir):
-    with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
-        kml_files = [f for f in kmz_file.namelist() if f.lower().endswith('.kml')]
-        if not kml_files:
-            raise Exception("❌ Tidak ada file .KML di dalam KMZ")
-        kmz_file.extract(kml_files[0], extract_dir)
-        return os.path.join(extract_dir, kml_files[0])
+    for chunk in pd.read_csv(csv_path_or_url, compression="gzip", chunksize=chunksize):
+        # Pastikan kolom lon/lat
+        if 'x' in chunk.columns and 'y' in chunk.columns:
+            chunk = chunk.rename(columns={'x':'longitude', 'y':'latitude'})
+        elif 'longitude' not in chunk.columns or 'latitude' not in chunk.columns:
+            continue
 
-# =====================
-# OSM ROADS
-# =====================
-def get_osm_roads(polygon, polygon_crs):
-    poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
-    tags = {"highway": True}
-    try:
-        roads = ox.features_from_polygon(poly_ll, tags=tags)
-    except Exception:
-        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-    if roads.empty:
-        return roads
-    roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
-    if roads.empty:
-        return roads
-    roads = roads.explode(index_parts=False)
-    roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
-    roads = roads.clip(poly_ll)
-    roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
-    roads = roads.reset_index(drop=True)
-    return roads
+        # Filter Pekanbaru
+        chunk = chunk[
+            (chunk.longitude >= PEKANBARU_BBOX["min_lon"]) &
+            (chunk.longitude <= PEKANBARU_BBOX["max_lon"]) &
+            (chunk.latitude >= PEKANBARU_BBOX["min_lat"]) &
+            (chunk.latitude <= PEKANBARU_BBOX["max_lat"])
+        ]
+        if chunk.empty:
+            continue
 
-# =====================
-# OSM BUILDINGS
-# =====================
-def get_osm_buildings(polygon, polygon_crs):
-    poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
-    tags = {"building": True}
-    try:
-        buildings = ox.features_from_polygon(poly_ll, tags=tags)
-    except Exception:
-        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-    if buildings.empty:
-        return buildings
-    buildings = buildings[buildings.geometry.type.isin(["Polygon", "MultiPolygon"])]
-    if buildings.empty:
-        return buildings
-    buildings = buildings.explode(index_parts=False)
-    buildings = buildings[~buildings.geometry.is_empty & buildings.geometry.notnull()]
-    buildings = buildings.clip(poly_ll)
-    buildings = buildings.reset_index(drop=True)
-    return buildings
+        gdf_chunk = gpd.GeoDataFrame(
+            chunk,
+            geometry=gpd.points_from_xy(chunk.longitude, chunk.latitude),
+            crs="EPSG:4326"
+        )
+        gdf_list.append(gdf_chunk)
 
-# =====================
-# GOOGLE OPEN BUILDINGS
-# =====================
-def load_google_buildings(csv_gz_path, polygon=None, polygon_crs="EPSG:4326"):
-    df = pd.read_csv(csv_gz_path, compression='gzip')
-    if 'x' in df.columns and 'y' in df.columns:
-        df = df.rename(columns={'x':'longitude', 'y':'latitude'})
-    elif 'longitude' not in df.columns or 'latitude' not in df.columns:
-        raise Exception("CSV Google Open Buildings tidak ada kolom longitude/latitude")
-    gdf = gpd.GeoDataFrame(
-        df,
-        geometry=gpd.points_from_xy(df.longitude, df.latitude),
-        crs="EPSG:4326"
-    )
-    if polygon is not None:
-        poly_ll = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs("EPSG:4326").iloc[0]
-        gdf = gdf[gdf.geometry.within(poly_ll)]
-    # Ubah point ke kotak kecil (5m)
-    gdf['geometry'] = gdf['geometry'].buffer(5)
+    if not gdf_list:
+        raise Exception("❌ CSV tidak ada data valid untuk Pekanbaru")
+
+    gdf = pd.concat(gdf_list, ignore_index=True)
+    gdf = gdf.to_crs(TARGET_EPSG)
     return gdf
 
 # =====================
-# STRIP Z
+# Buat jalan dari point
+# =====================
+def create_roads_from_points(gdf, width=DEFAULT_WIDTH):
+    lines = []
+    for pt in gdf.geometry:
+        x, y = pt.x, pt.y
+        line_h = LineString([(x - width, y), (x + width, y)])
+        line_v = LineString([(x, y - width), (x, y + width)])
+        lines.extend([line_h, line_v])
+    roads_gdf = gpd.GeoDataFrame(geometry=lines, crs=gdf.crs)
+    roads = roads_gdf.unary_union
+    if isinstance(roads, LineString):
+        roads = MultiLineString([roads])
+    return gpd.GeoDataFrame(geometry=[roads], crs=gdf.crs)
+
+# =====================
+# Strip Z
 # =====================
 def strip_z(geom):
     if geom.geom_type == "LineString" and hasattr(geom, "has_z") and geom.has_z:
@@ -136,10 +97,33 @@ def strip_z(geom):
     return geom
 
 # =====================
-# ADD BUILDINGS KE DXF
+# Export DXF
 # =====================
-def add_buildings_to_dxf(msp, buildings, min_x, min_y):
-    for geom in buildings.geometry:
+def export_to_dxf(gdf_roads, gdf_buildings, dxf_path):
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    # ROADS
+    all_buffers = []
+    for _, row in gdf_roads.iterrows():
+        geom = strip_z(row.geometry)
+        if geom.is_empty:
+            continue
+        buffered = geom.buffer(DEFAULT_WIDTH / 2, resolution=8, join_style=2)
+        all_buffers.append(buffered)
+    if all_buffers:
+        all_union = unary_union(all_buffers)
+        outlines = list(polygonize(all_union.boundary))
+        bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
+        min_x = min(x for x, y in bounds)
+        min_y = min(y for x, y in bounds)
+        for outline in outlines:
+            coords = [(pt[0]-min_x, pt[1]-min_y) for pt in outline.exterior.coords]
+            msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
+    else:
+        min_x = min_y = 0
+
+    # BUILDINGS
+    for geom in gdf_buildings.geometry:
         if geom.is_empty:
             continue
         minx, miny, maxx, maxy = geom.bounds
@@ -147,109 +131,43 @@ def add_buildings_to_dxf(msp, buildings, min_x, min_y):
         coords = [(x - min_x, y - min_y) for x, y in rect.exterior.coords]
         msp.add_lwpolyline(coords, dxfattribs={"layer": "BUILDINGS"})
 
-# =====================
-# EXPORT DXF
-# =====================
-def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings=None):
-    doc = ezdxf.new()
-    msp = doc.modelspace()
-    all_buffers = []
-    for _, row in gdf_roads.iterrows():
-        geom = strip_z(row.geometry)
-        _, width = classify_layer(str(row.get("highway", "")))
-        if geom.is_empty or not geom.is_valid:
-            continue
-        merged = geom if isinstance(geom, LineString) else linemerge(geom)
-        if isinstance(merged, (LineString, MultiLineString)):
-            buffered = merged.buffer(width / 2, resolution=8, join_style=2)
-            all_buffers.append(buffered)
-    if not all_buffers:
-        raise Exception("❌ Tidak ada garis valid untuk diekspor.")
-    all_union = unary_union(all_buffers)
-    outlines = list(polygonize(all_union.boundary))
-    if not outlines:
-        raise Exception("❌ Polygonize gagal menghasilkan outline.")
-    bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
-    min_x = min(x for x, y in bounds)
-    min_y = min(y for x, y in bounds)
-    # ROADS
-    for outline in outlines:
-        coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
-        msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
-    # BOUNDARY
-    if polygon is not None and polygon_crs is not None:
-        poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
-        if poly.geom_type == 'Polygon':
-            coords = [(pt[0] - min_x, pt[1] - min_y) for pt in poly.exterior.coords]
-            msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
-        elif poly.geom_type == 'MultiPolygon':
-            for p in poly.geoms:
-                coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
-                msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
-    # BUILDINGS
-    if buildings is not None and not buildings.empty:
-        add_buildings_to_dxf(msp, buildings, min_x, min_y)
     doc.set_modelspace_vport(height=10000)
     doc.saveas(dxf_path)
 
 # =====================
-# PROSES UTAMA
+# Streamlit App
 # =====================
-def process_kml_to_dxf(kml_path, output_dir, google_building_csv=None):
-    os.makedirs(output_dir, exist_ok=True)
-    polygon, polygon_crs = extract_polygon_from_kml(kml_path)
-    roads = get_osm_roads(polygon, polygon_crs)
-    buildings = get_osm_buildings(polygon, polygon_crs)
-    if buildings.empty and google_building_csv is not None:
-        buildings = load_google_buildings(google_building_csv, polygon, polygon_crs)
-    geojson_path = os.path.join(output_dir, "roadmap_osm.geojson")
-    dxf_path = os.path.join(output_dir, "roadmap_osm.dxf")
-    if not roads.empty or not buildings.empty:
-        roads_utm = roads.to_crs(TARGET_EPSG) if not roads.empty else gpd.GeoDataFrame(geometry=[], crs=TARGET_EPSG)
-        buildings_utm = buildings.to_crs(TARGET_EPSG) if not buildings.empty else None
-        if not roads_utm.empty:
-            roads_utm.to_file(geojson_path, driver="GeoJSON")
-        export_to_dxf(roads_utm, dxf_path, polygon, polygon_crs, buildings_utm)
-        return dxf_path, geojson_path, True
-    else:
-        raise Exception("Tidak ada jalan atau bangunan ditemukan di dalam area polygon.")
-
-# =====================
-# STREAMLIT
-# =====================
-def run_kml_dxf():
-    st.title("🌍 KML/KMZ → Jalan & Kotak Bangunan dari Boundary")
+def run_app():
+    st.title("📦 Google Open Buildings → Jalan & Bangunan DXF")
     st.markdown("""
-<h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
-✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
-1️⃣ Boleh upload `.KML` atau `.KMZ`.<br>
-2️⃣ Sistem pastikan polygon ke EPSG:4326 sebelum query OSM.<br>
-3️⃣ Bangunan digambar sebagai kotak (bounding box) di layer <code>BUILDINGS</code>.<br>
-4️⃣ Bisa juga upload Google Open Buildings CSV (.csv.gz) jika OSM kosong.<br><br>
-""", unsafe_allow_html=True)
+    ✅ Bisa upload CSV atau pakai link **Google Drive** (.csv.gz)<br>
+    ✅ Filter otomatis: hanya data Pekanbaru<br>
+    ✅ Jalan dibuat otomatis dari point, bangunan sebagai kotak bounding box.<br>
+    """, unsafe_allow_html=True)
 
-    kml_file = st.file_uploader("Upload file .KML atau .KMZ", type=["kml", "kmz"])
-    google_csv = st.file_uploader("Opsional: Upload Google Open Buildings CSV (.csv.gz)", type=["csv.gz"])
+    csv_file = st.file_uploader("Upload CSV Google Open Buildings", type=["csv.gz"])
+    drive_url = st.text_input("Atau masukkan link Google Drive (shareable link)")
 
-    if kml_file:
-        with st.spinner("💫 Memproses file..."):
+    if csv_file or drive_url:
+        with st.spinner("💫 Memproses..."):
             try:
-                temp_input = f"/tmp/{kml_file.name}"
-                with open(temp_input, "wb") as f:
-                    f.write(kml_file.read())
-                if temp_input.lower().endswith(".kmz"):
-                    temp_input = extract_kmz_to_kml(temp_input, "/tmp")
-                output_dir = "/tmp/output"
-                dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir, google_building_csv=google_csv)
-                if ok:
-                    st.success("✅ Berhasil diekspor ke DXF!")
-                    with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_osm.dxf")
+                if csv_file:
+                    temp_csv = f"/tmp/{csv_file.name}"
+                    with open(temp_csv, "wb") as f:
+                        f.write(csv_file.read())
+                    gdf_buildings = load_google_buildings(temp_csv)
+                else:
+                    gdf_buildings = load_google_buildings(drive_url)
+
+                gdf_roads = create_roads_from_points(gdf_buildings)
+                dxf_path = "/tmp/buildings_roads.dxf"
+                export_to_dxf(gdf_roads, gdf_buildings, dxf_path)
+
+                st.success("✅ DXF berhasil dibuat!")
+                with open(dxf_path, "rb") as f:
+                    st.download_button("⬇️ Download DXF", data=f, file_name="buildings_roads.dxf")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
 
-# =====================
-# RUN APP
-# =====================
 if __name__ == "__main__":
-    run_kml_dxf()
+    run_app()
