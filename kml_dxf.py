@@ -165,28 +165,35 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
     doc = ezdxf.new()
     msp = doc.modelspace()
     all_buffers = []
+
     for _, row in gdf_roads.iterrows():
         geom = strip_z(row.geometry)
         _, width = classify_layer(str(row.get("highway", "")))
         if geom.is_empty or not geom.is_valid:
             continue
-        merged = geom if isinstance(geom, LineString) else linemerge(geom)
-        if isinstance(merged, (LineString, MultiLineString)):
+
+        # ==== SAFE MERGE FOR LINE & POLYGON ====
+        if isinstance(geom, (LineString, MultiLineString)):
+            merged = geom if isinstance(geom, LineString) else linemerge(geom)
             buffered = merged.buffer(width / 2, resolution=8, join_style=2)
             all_buffers.append(buffered)
+        elif isinstance(geom, (Polygon, MultiPolygon)):
+            all_buffers.append(geom.boundary)
+
+    # ==== ROADS / OUTLINES ====
     if all_buffers:
         all_union = unary_union(all_buffers)
         outlines = list(polygonize(all_union.boundary))
         bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
         min_x = min(x for x, y in bounds)
         min_y = min(y for x, y in bounds)
-        # ROADS
         for outline in outlines:
             coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
             msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
     else:
         min_x = min_y = 0
-    # BOUNDARY
+
+    # ==== BOUNDARY ====
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
         if poly.geom_type == 'Polygon':
@@ -196,9 +203,11 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
             for p in poly.geoms:
                 coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
                 msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
-    # BUILDINGS
+
+    # ==== BUILDINGS ====
     if buildings is not None and not buildings.empty:
         add_buildings_to_dxf(msp, buildings, min_x, min_y)
+
     doc.set_modelspace_vport(height=10000)
     doc.saveas(dxf_path)
 
