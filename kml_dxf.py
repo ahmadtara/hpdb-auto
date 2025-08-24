@@ -12,7 +12,7 @@ import json
 
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
-HERE_API_KEY = "ISI_API_KEY_HERE"  # <<=== Ganti dengan API Key HERE Maps kamu
+HERE_API_KEY = "k1mDEfR1Q3A_MtLqkxLrhbDcS-1oC4r7WzlgPrcv4Rk"  # <<=== Ganti dengan API Key HERE Maps kamu
 
 def classify_layer(hwy):
     if hwy in ['motorway', 'trunk', 'primary']:
@@ -149,3 +149,4 @@ def run_kml_dxf():
                         st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap.dxf")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
