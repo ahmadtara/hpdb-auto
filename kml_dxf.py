@@ -13,7 +13,7 @@ from shapely.ops import unary_union, linemerge, polygonize, snap
 # --------------------------
 TARGET_EPSG = "EPSG:32760"  # UTM 60S
 DEFAULT_WIDTH = 10
-HERE_API_KEY = "ISI_API_KEY_HERE"   # <<== GANTI DENGAN API KEY MU
+HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"   # <<== GANTI DENGAN API KEY MU
 
 
 # --------------------------
@@ -196,3 +196,4 @@ def run_kml_dxf():
                         st.download_button("⬇️ Download DXF", data=f, file_name="roadmap_here.dxf")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
