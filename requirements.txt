@@ -12,3 +12,5 @@ fastkml
 polyline
 fiona
 gdown
+mercantile
+mapbox-vector-tile
