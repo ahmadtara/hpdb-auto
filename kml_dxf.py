@@ -1,91 +1,63 @@
 import os
-import requests
-import mercantile
-import mapbox_vector_tile
+import zipfile
+from fastkml import kml
 import geopandas as gpd
 import streamlit as st
 import ezdxf
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, shape
-from shapely.ops import unary_union, linemerge, polygonize, snap
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString
+from shapely.ops import unary_union, linemerge, snap, polygonize
+import osmnx as ox
 
-# --------------------------
-# KONFIGURASI
-# --------------------------
-TARGET_EPSG = "EPSG:32760"  # UTM 60S
-DEFAULT_WIDTH = 10
-HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"   # <<== GANTI DENGAN API KEY MU
+TARGET_EPSG = "EPSG:32760"
+
+# ✅ Lebar jalan disesuaikan kondisi lapangan (perkiraan realistis)
+def classify_layer(hwy: str):
+    # Jalan utama
+    if hwy in ['motorway', 'trunk']:
+        return 'HIGHWAY', 24
+    elif hwy in ['primary']:
+        return 'PRIMARY', 18
+    elif hwy in ['secondary']:
+        return 'SECONDARY', 12
+    elif hwy in ['tertiary']:
+        return 'TERTIARY', 10
+
+    # Jalan lingkungan
+    elif hwy in ['residential', 'unclassified']:
+        return 'RESIDENTIAL', 8
+
+    # Jalan gang / sempit
+    elif hwy in ['service', 'living_street']:
+        return 'ALLEY', 4
+
+    # Jalur non kendaraan
+    elif hwy in ['footway', 'path', 'cycleway']:
+        return 'PATH', 2
+
+    # fallback default
+    return 'OTHER', 6
 
 
-# --------------------------
-# HELPER: Mapping jalan
-# --------------------------
-def classify_layer(hwy):
-    """Mapping HERE functionalClass -> Layer DXF"""
-    if str(hwy) in ["1", "2"]:       # FC1, FC2 = jalan besar
-        return "HIGHWAYS", 12
-    elif str(hwy) in ["3"]:          # FC3 = primary
-        return "MAJOR_ROADS", 10
-    elif str(hwy) in ["4"]:          # FC4 = minor
-        return "MINOR_ROADS", 8
-    elif str(hwy) in ["5"]:          # FC5 = service / lokal
-        return "PATHS", 6
-    return "OTHER", DEFAULT_WIDTH
-
-
-# --------------------------
-# Ekstrak polygon dari KML
-# --------------------------
 def extract_polygon_from_kml(kml_path):
     gdf = gpd.read_file(kml_path)
     polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
     if polygons.empty:
-        raise Exception("❌ No Polygon found in KML")
+        raise Exception("No Polygon found in KML")
     return unary_union(polygons.geometry), polygons.crs
 
 
-# --------------------------
-# Ambil jalan dari HERE
-# --------------------------
-def get_here_roads(polygon):
-    """Ambil data jalan dari HERE Maps API berdasarkan boundary polygon"""
-    minx, miny, maxx, maxy = polygon.bounds
-
-    zoom = 14  # detail (bisa 15 kalau perlu lebih halus)
-    tiles = list(mercantile.tiles(minx, miny, maxx, maxy, zoom))
-
-    features = []
-    for tile in tiles:
-        url = f"https://vector.hereapi.com/v2/vectortiles/base/mc/{zoom}/{tile.x}/{tile.y}/omv?apiKey={HERE_API_KEY}"
-        resp = requests.get(url)
-        if resp.status_code != 200:
-            continue
-
-        data = resp.content
-        tile_data = mapbox_vector_tile.decode(data)
-
-        # cari layer jalan
-        for layer_name in tile_data.keys():
-            if "ROAD_GEOM" in layer_name:
-                for feat in tile_data[layer_name]["features"]:
-                    try:
-                        geom = shape(feat["geometry"])
-                        hwy = feat["properties"].get("functionalClass", "5")
-                        features.append({"geometry": geom, "highway": hwy})
-                    except Exception:
-                        continue
-
-    if not features:
-        raise Exception("❌ Tidak ada jalan ditemukan dari HERE API")
-
-    gdf = gpd.GeoDataFrame(features, crs="EPSG:4326")
-    # Clip ke polygon
-    gdf = gpd.clip(gdf, gpd.GeoSeries([polygon], crs="EPSG:4326"))
-    return gdf
+def get_osm_roads(polygon):
+    tags = {"highway": True}
+    roads = ox.features_from_polygon(polygon, tags=tags)
+    roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
+    roads = roads.explode(index_parts=False)
+    roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
+    roads = roads.clip(polygon)
+    roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
+    roads = roads.reset_index(drop=True)
+    return roads
 
 
-# --------------------------
-# Bersihkan Z
-# --------------------------
 def strip_z(geom):
     if geom.geom_type == "LineString" and geom.has_z:
         return LineString([(x, y) for x, y, *_ in geom.coords])
@@ -97,14 +69,13 @@ def strip_z(geom):
     return geom
 
 
-# --------------------------
-# Export ke DXF
-# --------------------------
 def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     doc = ezdxf.new()
     msp = doc.modelspace()
 
+    all_lines = []
     all_buffers = []
+    buffer_layers = []
 
     for _, row in gdf.iterrows():
         geom = strip_z(row.geometry)
@@ -114,11 +85,16 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
         if geom.is_empty or not geom.is_valid:
             continue
 
-        merged = geom if isinstance(geom, LineString) else linemerge(geom)
+        if isinstance(geom, LineString):
+            merged = geom
+        else:
+            merged = linemerge(geom)
 
         if isinstance(merged, (LineString, MultiLineString)):
             buffered = merged.buffer(width / 2, resolution=8, join_style=2)
+            all_lines.append(merged)
             all_buffers.append(buffered)
+            buffer_layers.append(layer)
 
     if not all_buffers:
         raise Exception("❌ Tidak ada garis valid untuk diekspor.")
@@ -132,17 +108,23 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     min_x = min(x for x, y in bounds)
     min_y = min(y for x, y in bounds)
 
-    for outline in outlines:
-        coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
-        msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
+    # ✅ Tambahkan jalan per layer (HIGHWAY, PRIMARY, RESIDENTIAL, dll)
+    for geom, layer in zip(all_buffers, buffer_layers):
+        if geom.geom_type == "Polygon":
+            coords = [(pt[0] - min_x, pt[1] - min_y) for pt in geom.exterior.coords]
+            msp.add_lwpolyline(coords, dxfattribs={"layer": layer})
+        elif geom.geom_type == "MultiPolygon":
+            for p in geom.geoms:
+                coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
+                msp.add_lwpolyline(coords, dxfattribs={"layer": layer})
 
-    # gambar boundary polygon
+    # Tambahkan boundary KML kalau ada
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
-        if poly.geom_type == "Polygon":
+        if poly.geom_type == 'Polygon':
             coords = [(pt[0] - min_x, pt[1] - min_y) for pt in poly.exterior.coords]
             msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
-        elif poly.geom_type == "MultiPolygon":
+        elif poly.geom_type == 'MultiPolygon':
             for p in poly.geoms:
                 coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
                 msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
@@ -151,16 +133,13 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     doc.saveas(dxf_path)
 
 
-# --------------------------
-# Main process
-# --------------------------
 def process_kml_to_dxf(kml_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     polygon, polygon_crs = extract_polygon_from_kml(kml_path)
-    roads = get_here_roads(polygon)
+    roads = get_osm_roads(polygon)
 
-    geojson_path = os.path.join(output_dir, "roadmap_here.geojson")
-    dxf_path = os.path.join(output_dir, "roadmap_here.dxf")
+    geojson_path = os.path.join(output_dir, "roadmap_osm.geojson")
+    dxf_path = os.path.join(output_dir, "roadmap_osm.dxf")
 
     if not roads.empty:
         roads_utm = roads.to_crs(TARGET_EPSG)
@@ -168,16 +147,20 @@ def process_kml_to_dxf(kml_path, output_dir):
         export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs)
         return dxf_path, geojson_path, True
     else:
-        raise Exception("❌ Tidak ada jalan ditemukan di dalam area polygon.")
+        raise Exception("Tidak ada jalan ditemukan di dalam area polygon.")
 
 
-# --------------------------
-# Streamlit UI
-# --------------------------
 def run_kml_dxf():
-    st.title("🌍 KML → Road Converter (HERE API)")
-    st.caption("Upload file .KML (area batas cluster)")
+    st.title("🌍 KML → Road Converter")
+    st.markdown("""
+<h2>👋 Hai, <span style='color:#0A84FF'>obi</span></h2>
+✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
+1️⃣ <span style='color:#FF6B6B;'>POLYGON KML</span> yang disave tidak dalam folder .<br>
+2️⃣ Maksudnya lansung save polygon saja tanpa pakai folder<br>
+3️⃣ Setelah berhasil silahkan gabungkan manual dengan file KMZ > DWG </span>.<br><br>
 
+""", unsafe_allow_html=True)
+    st.caption("Upload file .KML (area batas cluster)")
     kml_file = st.file_uploader("Upload file .KML", type=["kml"])
 
     if kml_file:
@@ -191,9 +174,9 @@ def run_kml_dxf():
                 dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir)
 
                 if ok:
-                    st.success("✅ Berhasil diekspor ke DXF (HERE API)!")
+                    st.success("✅ Berhasil diekspor ke DXF!")
                     with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download DXF", data=f, file_name="roadmap_here.dxf")
+                        st.download_button("⬇️ Download Jalan Autocad UTM 60", data=f, file_name="roadmap_osm.dxf")
+             
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
-
