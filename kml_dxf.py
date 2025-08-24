@@ -1,51 +1,53 @@
 import os
 import zipfile
+import tempfile
 from fastkml import kml
 import geopandas as gpd
 import streamlit as st
 import ezdxf
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString, MultiLineString
-from shapely.ops import unary_union, linemerge, snap, polygonize
+from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
+from shapely.ops import unary_union, linemerge, snap
 import osmnx as ox
 
 TARGET_EPSG = "EPSG:32760"
+DEFAULT_WIDTH = 6   # default jalan kecil
 
-# ✅ Lebar jalan disesuaikan kondisi lapangan (perkiraan realistis)
-def classify_layer(hwy: str):
-    # Jalan utama
-    if hwy in ['motorway', 'trunk']:
-        return 'HIGHWAY', 24
-    elif hwy in ['primary']:
-        return 'PRIMARY', 18
-    elif hwy in ['secondary']:
-        return 'SECONDARY', 12
-    elif hwy in ['tertiary']:
-        return 'TERTIARY', 10
-
-    # Jalan lingkungan
-    elif hwy in ['residential', 'unclassified']:
-        return 'RESIDENTIAL', 8
-
-    # Jalan gang / sempit
-    elif hwy in ['service', 'living_street']:
-        return 'ALLEY', 4
-
-    # Jalur non kendaraan
-    elif hwy in ['footway', 'path', 'cycleway']:
-        return 'PATH', 2
-
-    # fallback default
-    return 'OTHER', 6
+# 🔹 Klasifikasi jalan berdasarkan tipe OSM
+def classify_layer(hwy):
+    if hwy in ['motorway', 'trunk', 'primary']:
+        return 'HIGHWAYS', 18
+    elif hwy in ['secondary', 'tertiary']:
+        return 'MAJOR_ROADS', 12
+    elif hwy in ['residential', 'unclassified', 'service']:
+        return 'MINOR_ROADS', 8
+    elif hwy in ['living_street']:
+        return 'RESIDENTIAL', 6
+    elif hwy in ['footway', 'path', 'cycleway', 'pedestrian']:
+        return 'PATHS', 3
+    return 'OTHER', DEFAULT_WIDTH
 
 
-def extract_polygon_from_kml(kml_path):
-    gdf = gpd.read_file(kml_path)
+# 🔹 Extract polygon dari KML atau KMZ
+def extract_polygon_from_file(filepath):
+    ext = os.path.splitext(filepath)[1].lower()
+
+    if ext == ".kmz":
+        with zipfile.ZipFile(filepath, "r") as z:
+            kml_files = [f for f in z.namelist() if f.endswith(".kml")]
+            if not kml_files:
+                raise Exception("❌ Tidak ada file .kml di dalam KMZ")
+            tempdir = tempfile.mkdtemp()
+            z.extract(kml_files[0], tempdir)
+            filepath = os.path.join(tempdir, kml_files[0])
+
+    gdf = gpd.read_file(filepath)
     polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
     if polygons.empty:
-        raise Exception("No Polygon found in KML")
+        raise Exception("❌ Tidak ada Polygon ditemukan di file")
     return unary_union(polygons.geometry), polygons.crs
 
 
+# 🔹 Ambil jalan dari OSM
 def get_osm_roads(polygon):
     tags = {"highway": True}
     roads = ox.features_from_polygon(polygon, tags=tags)
@@ -58,6 +60,7 @@ def get_osm_roads(polygon):
     return roads
 
 
+# 🔹 Hilangkan Z koordinat
 def strip_z(geom):
     if geom.geom_type == "LineString" and geom.has_z:
         return LineString([(x, y) for x, y, *_ in geom.coords])
@@ -69,14 +72,12 @@ def strip_z(geom):
     return geom
 
 
+# 🔹 Export ke DXF (tanpa tabrakan garis)
 def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     doc = ezdxf.new()
     msp = doc.modelspace()
 
-    all_lines = []
     all_buffers = []
-    buffer_layers = []
-
     for _, row in gdf.iterrows():
         geom = strip_z(row.geometry)
         hwy = str(row.get("highway", ""))
@@ -85,40 +86,34 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
         if geom.is_empty or not geom.is_valid:
             continue
 
-        if isinstance(geom, LineString):
-            merged = geom
-        else:
-            merged = linemerge(geom)
-
+        merged = geom if isinstance(geom, LineString) else linemerge(geom)
         if isinstance(merged, (LineString, MultiLineString)):
-            buffered = merged.buffer(width / 2, resolution=8, join_style=2)
-            all_lines.append(merged)
+            buffered = merged.buffer(width / 2, resolution=8, join_style=1)
             all_buffers.append(buffered)
-            buffer_layers.append(layer)
 
     if not all_buffers:
         raise Exception("❌ Tidak ada garis valid untuk diekspor.")
 
+    # 🔹 Union langsung → tidak ada tabrakan
     all_union = unary_union(all_buffers)
-    outlines = list(polygonize(all_union.boundary))
-    if not outlines:
-        raise Exception("❌ Polygonize gagal menghasilkan outline.")
 
+    # Outline hasil union
+    outlines = []
+    if all_union.geom_type == "Polygon":
+        outlines = [all_union]
+    elif all_union.geom_type == "MultiPolygon":
+        outlines = list(all_union.geoms)
+
+    # Normalisasi posisi supaya (0,0) di kiri bawah
     bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
     min_x = min(x for x, y in bounds)
     min_y = min(y for x, y in bounds)
 
-    # ✅ Tambahkan jalan per layer (HIGHWAY, PRIMARY, RESIDENTIAL, dll)
-    for geom, layer in zip(all_buffers, buffer_layers):
-        if geom.geom_type == "Polygon":
-            coords = [(pt[0] - min_x, pt[1] - min_y) for pt in geom.exterior.coords]
-            msp.add_lwpolyline(coords, dxfattribs={"layer": layer})
-        elif geom.geom_type == "MultiPolygon":
-            for p in geom.geoms:
-                coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
-                msp.add_lwpolyline(coords, dxfattribs={"layer": layer})
+    for outline in outlines:
+        coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
+        msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
 
-    # Tambahkan boundary KML kalau ada
+    # Tambah boundary polygon
     if polygon is not None and polygon_crs is not None:
         poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
         if poly.geom_type == 'Polygon':
@@ -133,9 +128,10 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     doc.saveas(dxf_path)
 
 
-def process_kml_to_dxf(kml_path, output_dir):
+# 🔹 Proses utama
+def process_kml_to_dxf(input_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    polygon, polygon_crs = extract_polygon_from_kml(kml_path)
+    polygon, polygon_crs = extract_polygon_from_file(input_path)
     roads = get_osm_roads(polygon)
 
     geojson_path = os.path.join(output_dir, "roadmap_osm.geojson")
@@ -150,25 +146,26 @@ def process_kml_to_dxf(kml_path, output_dir):
         raise Exception("Tidak ada jalan ditemukan di dalam area polygon.")
 
 
+# 🔹 Streamlit app
 def run_kml_dxf():
-    st.title("🌍 KML → Road Converter")
+    st.title("🌍 KML/KMZ → Road Converter")
     st.markdown("""
-<h2>👋 Hai, <span style='color:#0A84FF'>obi</span></h2>
-✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
-1️⃣ <span style='color:#FF6B6B;'>POLYGON KML</span> yang disave tidak dalam folder .<br>
-2️⃣ Maksudnya lansung save polygon saja tanpa pakai folder<br>
-3️⃣ Setelah berhasil silahkan gabungkan manual dengan file KMZ > DWG </span>.<br><br>
+    <h2>👋 Hai, <span style='color:#0A84FF'>obi</span></h2>
+    ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
+    1️⃣ Upload file **KML/KMZ** berisi polygon batas.<br>
+    2️⃣ Sistem akan otomatis ambil jalan dari OSM.<br>
+    3️⃣ Hasil bisa didownload dalam format **DXF (UTM 60S)**.<br>
+    """, unsafe_allow_html=True)
+    st.caption("Upload file .KML atau .KMZ (area batas cluster)")
 
-""", unsafe_allow_html=True)
-    st.caption("Upload file .KML (area batas cluster)")
-    kml_file = st.file_uploader("Upload file .KML", type=["kml"])
+    input_file = st.file_uploader("Upload file .KML / .KMZ", type=["kml", "kmz"])
 
-    if kml_file:
+    if input_file:
         with st.spinner("💫 Memproses file..."):
             try:
-                temp_input = f"/tmp/{kml_file.name}"
+                temp_input = f"/tmp/{input_file.name}"
                 with open(temp_input, "wb") as f:
-                    f.write(kml_file.read())
+                    f.write(input_file.read())
 
                 output_dir = "/tmp/output"
                 dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir)
