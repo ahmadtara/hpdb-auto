@@ -1,29 +1,53 @@
 import os
 import zipfile
+import requests
 import pandas as pd
 import geopandas as gpd
 import streamlit as st
 import ezdxf
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, box
+from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, box, shape, mapping
 from shapely.ops import unary_union, linemerge, snap, polygonize
-import osmnx as ox
 from shapely import wkt
+import mercantile
+import math
+from mapbox_vector_tile import decode as mvt_decode
 
+# =====================
+# KONFIG
+# =====================
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
 MAX_CSV_ROWS = 50000  # batasi row CSV agar tidak crash
 
+# ====== MASUKKAN API KEY HERE DI SINI ======
+HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
+
+# Zoom tile default untuk tingkat detail jalan.
+# 14–16 umumnya cukup. Makin besar = makin detail tapi lebih banyak tile.
+HERE_TILE_ZOOM = 15
+
+# Endpoint Vector Tile HERE (v3) – fallback ke v2 jika perlu.
+# v3 (mvt): https://vector.hereapi.com/v3/tiles/base/mc/{z}/{x}/{y}/mvt?apiKey=...
+# v2 (omv): https://vector.hereapi.com/v2/vectortiles/base/mc/{z}/{x}/{y}/omv?apiKey=...
+HERE_V3_URL = "https://vector.hereapi.com/v3/tiles/base/mc/{z}/{x}/{y}/mvt?apiKey={api_key}"
+HERE_V2_URL = "https://vector.hereapi.com/v2/vectortiles/base/mc/{z}/{x}/{y}/omv?apiKey={api_key}"
+
 # =====================
 # LAYER / WIDTH
 # =====================
-def classify_layer(hwy):
-    if hwy in ['motorway', 'trunk', 'primary']:
+def classify_layer(kind_or_fc):
+    """
+    Mapping sederhana dari atribut HERE (kind / functionalClass)
+    ke layer internal + lebar garis (untuk buffer).
+    """
+    val = (kind_or_fc or "").lower()
+    if val in ["motorway", "trunk", "highway", "freeway", "fc1"]:
         return 'HIGHWAYS', 10
-    elif hwy in ['secondary', 'tertiary']:
+    elif val in ["primary", "primary_link", "fc2", "secondary", "tertiary", "main"]:
         return 'MAJOR_ROADS', 10
-    elif hwy in ['residential', 'unclassified', 'service']:
+    elif val in ["residential", "street", "service", "unclassified", "fc3", "fc4", "local"]:
         return 'MINOR_ROADS', 10
-    elif hwy in ['footway', 'path', 'cycleway']:
+    elif val in ["path", "footway", "cycleway", "track", "trail"]:
         return 'PATHS', 10
     return 'OTHER', DEFAULT_WIDTH
 
@@ -58,31 +82,153 @@ def extract_kmz_to_kml(kmz_path, extract_dir):
         return os.path.join(extract_dir, kml_files[0])
 
 # =====================
-# OSM ROADS
+# KONVERSI KOORDINAT MVT TILE → LON/LAT
 # =====================
-def get_osm_roads(polygon, polygon_crs):
-    poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
-    tags = {"highway": True}
-    try:
-        roads = ox.features_from_polygon(poly_ll, tags=tags)
-    except Exception:
-        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
-    if roads.empty:
-        return roads
-    roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
-    if roads.empty:
-        return roads
-    roads = roads.explode(index_parts=False)
-    roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
-    roads = roads.clip(poly_ll)
-    roads["geometry"] = roads["geometry"].apply(lambda g: snap(g, g, tolerance=0.0001))
-    roads = roads.reset_index(drop=True)
-    return roads
+def _interp(a0, a1, t):
+    return a0 + (a1 - a0) * t
+
+def _tile_bounds_lonlat(x, y, z):
+    """Batas tile dalam lon/lat menggunakan mercantile."""
+    b = mercantile.bounds(x, y, z)
+    return (b.west, b.south, b.east, b.north)  # (minx, miny, maxx, maxy) in lon/lat
+
+def _geom_coords_from_mvt(commands, extent, x, y, z):
+    """
+    Ubah koordinat MVT (0..extent) ke lon/lat berdasarkan bbox tile.
+    Return list of LineString koord (list of tuples).
+    """
+    minx, miny, maxx, maxy = _tile_bounds_lonlat(x, y, z)
+    # MVT origin (0,0) di kiri atas tile; sumbu y ke bawah.
+    # Kita perlu membalik sumbu Y.
+    lines = []
+    for ring in commands:
+        ll = []
+        for (px, py) in ring:
+            lon = _interp(minx, maxx, px / extent)
+            lat = _interp(maxy, miny, py / extent)  # flip Y
+            ll.append((lon, lat))
+        lines.append(ll)
+    return lines
 
 # =====================
-# OSM BUILDINGS
+# HERE VECTOR TILE → GeoDataFrame (roads)
+# =====================
+def _fetch_here_tile(x, y, z):
+    # Coba v3 (mvt) dulu, fallback ke v2 (omv)
+    url_v3 = HERE_V3_URL.format(z=z, x=x, y=y, api_key=HERE_API_KEY)
+    r = requests.get(url_v3, timeout=20)
+    if r.status_code == 200 and r.content:
+        return r.content, "mvt"
+    # fallback v2
+    url_v2 = HERE_V2_URL.format(z=z, x=x, y=y, api_key=HERE_API_KEY)
+    r = requests.get(url_v2, timeout=20)
+    if r.status_code == 200 and r.content:
+        return r.content, "omv"
+    return None, None
+
+def get_here_roads(polygon, polygon_crs, zoom=HERE_TILE_ZOOM):
+    """
+    Ambil geometri jalan dari HERE Vector Tile API dalam area polygon.
+    Hasil GeoDataFrame EPSG:4326, hanya LineString/MultiLineString,
+    terklip ke polygon.
+    """
+    poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
+    minx, miny, maxx, maxy = poly_ll.bounds
+
+    # Kumpulkan daftar tile yang menutupi bbox polygon
+    tiles = list(mercantile.tiles(minx, miny, maxx, maxy, zooms=[zoom]))
+    features = []
+    for t in tiles:
+        blob, fmt = _fetch_here_tile(t.x, t.y, t.z)
+        if not blob:
+            continue
+        # Decode MVT ke dict: {layer: {features:[{geometry, properties, ...}]}}
+        mvt = mvt_decode(blob)
+        # Layer roads di HERE bisa muncul sebagai "roads", "transportation", dll.
+        # Kita iter semua layer yang mengandung data garis jalan.
+        candidate_layers = [k for k in mvt.keys() if "road" in k.lower() or "transport" in k.lower()]
+        if not candidate_layers:
+            # Kalau tidak ketemu, coba semua layer, nanti difilter by geometry type LineString
+            candidate_layers = list(mvt.keys())
+
+        # extent default mvt = 4096; ada di metadata tiap layer
+        for lname in candidate_layers:
+            layer = mvt[lname]
+            extent = layer.get("extent", 4096)
+            for feat in layer["features"]:
+                geom_type = feat["geometry"]["type"]
+                coords_cmd = feat["geometry"]["coordinates"]
+                props = feat.get("properties", {}) or {}
+
+                # Kita fokus ke garis (LineString/MultiLineString) atau boundary polygonal roads
+                if geom_type in ("LineString", "MultiLineString"):
+                    # Koordinat MVT bisa nested: list of list of (x,y)
+                    if geom_type == "LineString":
+                        lines = _geom_coords_from_mvt([coords_cmd], extent, t.x, t.y, t.z)
+                        line = LineString(lines[0]) if len(lines[0]) >= 2 else None
+                        if line is not None and not line.is_empty:
+                            features.append({"geometry": line, **props})
+                    else:
+                        lines = _geom_coords_from_mvt(coords_cmd, extent, t.x, t.y, t.z)
+                        mls = MultiLineString([ln for ln in map(LineString, lines) if len(ln.coords) >= 2])
+                        if len(mls.geoms) > 0:
+                            features.append({"geometry": mls, **props})
+                elif geom_type in ("Polygon", "MultiPolygon"):
+                    # Beberapa wilayah (Polygonal roads) – gunakan boundary agar jadi garis tepi jalan
+                    # supaya kompatibel dengan proses buffer kamu.
+                    if geom_type == "Polygon":
+                        lines = _geom_coords_from_mvt(coords_cmd, extent, t.x, t.y, t.z)
+                        for ring in lines:
+                            if len(ring) >= 2:
+                                features.append({"geometry": LineString(ring), **props})
+                    else:
+                        # MultiPolygon => banyak ring
+                        for poly_rings in coords_cmd:
+                            lines = _geom_coords_from_mvt(poly_rings, extent, t.x, t.y, t.z)
+                            for ring in lines:
+                                if len(ring) >= 2:
+                                    features.append({"geometry": LineString(ring), **props})
+
+    if not features:
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
+    gdf = gpd.GeoDataFrame(features, geometry=[f["geometry"] for f in features], crs="EPSG:4326")
+    # Tambahkan kolom "here_kind" dari properti yang umum (kind / class / functionalClass)
+    def _kind(props_row):
+        for k in ["kind", "class", "functionalClass", "road_class", "fclass", "fc"]:
+            if k in props_row and props_row[k]:
+                return str(props_row[k])
+        return None
+
+    # Simpan properti di kolom agar bisa diklasifikasikan
+    # (GeoPandas menaruh properti di kolom kecuali 'geometry' – sudah disusun di atas)
+    if "here_kind" not in gdf.columns:
+        gdf["here_kind"] = None
+    for i, row in gdf.iterrows():
+        # row adalah Series; cari di raw dict
+        # (karena di atas kita flatten props sebagai kolom, gunakan prioritas kolom jika ada)
+        if pd.isna(row.get("here_kind")):
+            hk = None
+            for k in ["kind", "class", "functionalClass", "road_class", "fclass", "fc"]:
+                if k in gdf.columns and pd.notna(row.get(k)):
+                    hk = str(row.get(k)); break
+            gdf.at[i, "here_kind"] = hk
+
+    # Potong ke polygon boundary
+    gdf = gdf.clip(poly_ll)
+    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notnull()]
+    gdf = gdf.reset_index(drop=True)
+
+    # Untuk kompatibilitas fungsi downstream yang pakai kolom "highway"
+    gdf["highway"] = gdf["here_kind"].fillna("")
+
+    return gdf
+
+# =====================
+# OSM BUILDINGS (tetap sebagai fallback / sumber bangunan)
 # =====================
 def get_osm_buildings(polygon, polygon_crs):
+    import osmnx as ox  # impor lokal bila tersedia
     poly_ll = ensure_wgs84_polygon(polygon, polygon_crs)
     tags = {"building": True}
     try:
@@ -171,7 +317,8 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
 
     for _, row in gdf_roads.iterrows():
         geom = strip_z(row.geometry)
-        _, width = classify_layer(str(row.get("highway", "")))
+        # pakai kolom "highway" (sudah diisi dari HERE kind)
+        layer_name, width = classify_layer(str(row.get("highway", "")))
         if geom.is_empty or not geom.is_valid:
             continue
 
@@ -185,6 +332,7 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
     if all_buffers:
         all_union = unary_union(all_buffers)
         outlines = list(polygonize(all_union.boundary))
+        # hitung offset supaya koordinat DXF mulai dari (0,0)
         bounds = [(pt[0], pt[1]) for geom in outlines for pt in geom.exterior.coords]
         min_x = min(x for x, y in bounds)
         min_y = min(y for x, y in bounds)
@@ -216,18 +364,24 @@ def export_to_dxf(gdf_roads, dxf_path, polygon=None, polygon_crs=None, buildings
 def process_kml_to_dxf(kml_path, output_dir, google_building_csv=None):
     os.makedirs(output_dir, exist_ok=True)
     polygon, polygon_crs = extract_polygon_from_kml(kml_path)
-    roads = get_osm_roads(polygon, polygon_crs)
+
+    # ==== GANTI: pakai HERE untuk ROADS ====
+    roads = get_here_roads(polygon, polygon_crs, zoom=HERE_TILE_ZOOM)
+
+    # ==== BUILDINGS tetap dari OSM / Google Open Buildings (opsional) ====
     buildings = get_osm_buildings(polygon, polygon_crs)
     if buildings.empty and google_building_csv is not None:
         buildings = load_google_buildings(google_building_csv, polygon, polygon_crs)
-    geojson_path = os.path.join(output_dir, "roadmap_osm.geojson")
-    dxf_path = os.path.join(output_dir, "roadmap_osm.dxf")
-    if not roads.empty or not buildings.empty:
+
+    geojson_path = os.path.join(output_dir, "roadmap_here.geojson")
+    dxf_path = os.path.join(output_dir, "roadmap_here.dxf")
+
+    if not roads.empty or (buildings is not None and not buildings.empty):
         roads_utm = roads.to_crs(TARGET_EPSG) if not roads.empty else gpd.GeoDataFrame(geometry=[], crs=TARGET_EPSG)
-        buildings_utm = buildings.to_crs(TARGET_EPSG) if not buildings.empty else None
+        buildings_utm = buildings.to_crs(TARGET_EPSG) if buildings is not None and not buildings.empty else None
         if not roads_utm.empty:
-            roads_utm.to_file(geojson_path, driver="GeoJSON")
-        export_to_dxf(roads_utm, dxf_path, polygon, polygon_crs, buildings_utm)
+            roads.to_file(geojson_path, driver="GeoJSON")  # simpan tetap dalam WGS84 supaya ringan
+        export_to_dxf(roads_utm if not roads_utm.empty else roads, dxf_path, polygon, polygon_crs, buildings_utm)
         return dxf_path, geojson_path, True
     else:
         raise Exception("Tidak ada jalan atau bangunan ditemukan di dalam area polygon.")
@@ -236,13 +390,13 @@ def process_kml_to_dxf(kml_path, output_dir, google_building_csv=None):
 # STREAMLIT
 # =====================
 def run_kml_dxf():
-    st.title("🌍 KML/KMZ/CSV → Jalan & Kotak Bangunan dari Boundary")
+    st.title("🌍 KML/KMZ/CSV → Jalan & Kotak Bangunan dari Boundary (Sumber Jalan: HERE)")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
-1️⃣ Boleh upload `.KML` atau `.KMZ`.<br>
+1️⃣ Bisa upload `.KML` atau `.KMZ`.<br>
 2️⃣ Atau upload CSV (WKT geometry).<br>
-3️⃣ Sistem pastikan polygon ke EPSG:4326 sebelum query OSM.<br>
+3️⃣ Sumber **jalan** dari <b>HERE Vector Tile API</b> (lebih sesuai kondisi aktual).<br>
 4️⃣ Bangunan digambar sebagai kotak (bounding box) di layer <code>BUILDINGS</code>.<br>
 5️⃣ Bisa juga upload Google Open Buildings CSV (.csv.gz) jika OSM kosong.<br><br>
 """, unsafe_allow_html=True)
@@ -253,7 +407,7 @@ def run_kml_dxf():
 
     # ==== KML / KMZ ====
     if kml_file:
-        with st.spinner("💫 Memproses file..."):
+        with st.spinner("💫 Memproses file (mengambil roads dari HERE)..."):
             try:
                 temp_input = f"/tmp/{kml_file.name}"
                 with open(temp_input, "wb") as f:
@@ -265,7 +419,9 @@ def run_kml_dxf():
                 if ok:
                     st.success("✅ Berhasil diekspor ke DXF!")
                     with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_osm.dxf")
+                        st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap_here.dxf")
+                    with open(geojson_path, "rb") as f:
+                        st.download_button("⬇️ Download GeoJSON (WGS84)", data=f, file_name="roadmap_here.geojson")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
 
