@@ -1,136 +1,80 @@
 import streamlit as st
 import zipfile
 import os
-from lxml import etree as ET      # <— ganti ke lxml (lebih robust untuk KML)
+from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
 
-# WGS84 -> UTM Zone 60S (sesuaikan bila perlu)
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
-# Folder yang memang ditarget (tetap seperti semula)
-BASE_TARGET_FOLDERS = {
+target_folders = {
     'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
-# ====== UTIL ======
-def extract_kmz(kmz_file, extract_dir):
-    """
-    Menerima UploadedFile/bytes path KMZ, ekstrak ke folder, return path doc.kml.
-    """
-    os.makedirs(extract_dir, exist_ok=True)
-    with zipfile.ZipFile(kmz_file, 'r') as kmz:
-        kmz.extractall(extract_dir)
-    # Umumnya di dalam KMZ ada doc.kml di root
+def extract_kmz(kmz_path, extract_dir):
+    with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
+        kmz_file.extractall(extract_dir)
     return os.path.join(extract_dir, "doc.kml")
 
-def _find_all_local(elem, tag_local):
-    """
-    Cari semua elemen berdasarkan local-name() agar tidak pusing namespace/prefix.
-    """
-    return elem.findall(f'.//*[local-name()="{tag_local}"]')
-
-def _find_first_local(elem, path_chain):
-    """
-    path_chain: list local-name, mis: ['Point', 'coordinates']
-    """
-    cur = elem
-    for name in path_chain:
-        found = cur.find(f'./*[local-name()="{name}"]')
-        if found is None:
-            return None
-        cur = found
-    return cur
-
 def parse_kml(kml_path):
-    """
-    Parsing KML robust: bebas prefix/namespace (lxml + local-name()).
-    Folder LINE A/B/C/D otomatis diikutkan.
-    """
-    parser = ET.XMLParser(recover=True, ns_clean=True, remove_blank_text=True)
+    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
     with open(kml_path, 'rb') as f:
-        tree = ET.parse(f, parser)
+        tree = ET.parse(f)
     root = tree.getroot()
-
+    folders = root.findall('.//kml:Folder', ns)
     items = []
-    folders = _find_all_local(root, "Folder")
     for folder in folders:
-        name_tag = folder.find('./*[local-name()="name"]')
-        if name_tag is None or (name_tag.text or "").strip() == "":
+        folder_name_tag = folder.find('kml:name', ns)
+        if folder_name_tag is None:
             continue
+        folder_name = folder_name_tag.text.strip().upper()
+        if folder_name not in target_folders:
+            continue
+        placemarks = folder.findall('.//kml:Placemark', ns)
+        for pm in placemarks:
+            name = pm.find('kml:name', ns)
+            name_text = name.text.strip() if name is not None else ""
 
-        folder_name = name_tag.text.strip().upper()
-
-        # Filter folder: tetap hormati daftar lama, tapi juga terima semua yang diawali "LINE "
-        in_scope = (folder_name in BASE_TARGET_FOLDERS) or folder_name.startswith("LINE ")
-        if not in_scope:
-            # Tetap loloskan variasi yang mengandung kata kunci penting
-            key_hits = any(k in folder_name for k in [
-                "BOUNDARY", "DISTRIBUTION CABLE", "SLING WIRE", "KOTAK", "JALAN",
-                "FAT", "FDT", "HP COVER", "HP UNCOVER", "EXISTING", "EMR", "NEW POLE", "LINE"
-            ])
-            if not key_hits:
+            point_coord = pm.find('.//kml:Point/kml:coordinates', ns)
+            if point_coord is not None:
+                lon, lat, *_ = point_coord.text.strip().split(',')
+                items.append({
+                    'type': 'point',
+                    'name': name_text,
+                    'latitude': float(lat),
+                    'longitude': float(lon),
+                    'folder': folder_name
+                })
                 continue
 
-        placemarks = folder.findall('.//*[local-name()="Placemark"]')
-        for pm in placemarks:
-            pname = pm.find('./*[local-name()="name"]')
-            name_text = (pname.text.strip() if pname is not None and pname.text else "")
-
-            # Point
-            point_coord = _find_first_local(pm, ["Point", "coordinates"])
-            if point_coord is not None and point_coord.text:
-                try:
-                    lon, lat, *_ = point_coord.text.strip().split(',')
-                    items.append({
-                        'type': 'point',
-                        'name': name_text,
-                        'latitude': float(lat),
-                        'longitude': float(lon),
-                        'folder': folder_name
-                    })
-                    continue
-                except Exception:
-                    pass
-
-            # LineString
-            line_coord = _find_first_local(pm, ["LineString", "coordinates"])
-            if line_coord is not None and line_coord.text:
+            line_coord = pm.find('.//kml:LineString/kml:coordinates', ns)
+            if line_coord is not None:
                 coords = []
-                # koordinat bisa dipisah spasi/newline, setiap item "lon,lat[,alt]"
                 for c in line_coord.text.strip().split():
-                    parts = c.split(',')
-                    if len(parts) >= 2:
-                        lon, lat = parts[0], parts[1]
-                        coords.append((float(lat), float(lon)))
-                if coords:
-                    items.append({
-                        'type': 'path',
-                        'name': name_text,
-                        'coords': coords,
-                        'folder': folder_name
-                    })
-                    continue
+                    lon, lat, *_ = c.split(',')
+                    coords.append((float(lat), float(lon)))
+                items.append({
+                    'type': 'path',
+                    'name': name_text,
+                    'coords': coords,
+                    'folder': folder_name
+                })
+                continue
 
-            # Polygon (ambil outerBoundary saja)
-            poly_coord = pm.find('.//*[local-name()="Polygon"]//*[local-name()="coordinates"]')
-            if poly_coord is not None and poly_coord.text:
+            poly_coord = pm.find('.//kml:Polygon//kml:coordinates', ns)
+            if poly_coord is not None:
                 coords = []
                 for c in poly_coord.text.strip().split():
-                    parts = c.split(',')
-                    if len(parts) >= 2:
-                        lon, lat = parts[0], parts[1]
-                        coords.append((float(lat), float(lon)))
-                if coords:
-                    items.append({
-                        'type': 'path',
-                        'name': name_text,
-                        'coords': coords,
-                        'folder': folder_name
-                    })
-
+                    lon, lat, *_ = c.split(',')
+                    coords.append((float(lat), float(lon)))
+                items.append({
+                    'type': 'path',
+                    'name': name_text,
+                    'coords': coords,
+                    'folder': folder_name
+                })
     return items
 
 def latlon_to_xy(lat, lon):
@@ -143,18 +87,12 @@ def apply_offset(points_xy):
     return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
 
 def classify_items(items):
-    """
-    Klasifikasi tetap seperti semula, ditambah:
-    - Semua folder yang diawali "LINE " akan dianggap DISTRIBUTION_CABLE.
-    """
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
         "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
-
     for it in items:
         folder = it['folder']
-
         if "FDT" in folder:
             classified["FDT"].append(it)
         elif "FAT" in folder and folder != "FAT AREA":
@@ -171,8 +109,6 @@ def classify_items(items):
             classified["BOUNDARY"].append(it)
         elif "DISTRIBUTION CABLE" in folder:
             classified["DISTRIBUTION_CABLE"].append(it)
-        elif folder.startswith("LINE"):                      # <— tambahan agar LINE A/B/C/D masuk
-            classified["DISTRIBUTION_CABLE"].append(it)
         elif "SLING WIRE" in folder:
             classified["SLING_WIRE"].append(it)
         elif "KOTAK" in folder:
@@ -181,7 +117,6 @@ def classify_items(items):
             classified["JALAN"].append(it)
         else:
             classified["POLE"].append(it)
-
     return classified
 
 def draw_to_template(classified, template_path):
@@ -193,7 +128,7 @@ def draw_to_template(classified, template_path):
 
     for e in msp:
         if e.dxftype() == 'TEXT':
-            txt = (e.dxf.text or "").upper()
+            txt = e.dxf.text.upper()
             if 'NN-' in txt:
                 matchprop_hp = e.dxf
             elif 'MR.SRMRW16' in txt:
@@ -201,7 +136,7 @@ def draw_to_template(classified, template_path):
             elif 'SRMRW16.067.B01' in txt:
                 matchprop_sr = e.dxf
         elif e.dxftype() == 'INSERT':
-            name = (e.dxf.name or "").upper()
+            name = e.dxf.name.upper()
             if name == "FAT":
                 matchblock_fat = e.dxf
             elif name == "FDT":
@@ -209,9 +144,8 @@ def draw_to_template(classified, template_path):
             elif name.startswith("A$"):
                 matchblock_pole = e.dxf
 
-    # Kumpulkan semua titik untuk dihitung offset pusat
     all_xy = []
-    for _, cat_items in classified.items():
+    for layer_name, cat_items in classified.items():
         for obj in cat_items:
             if obj['type'] == 'point':
                 all_xy.append(latlon_to_xy(obj['latitude'], obj['longitude']))
@@ -219,24 +153,21 @@ def draw_to_template(classified, template_path):
                 all_xy.extend([latlon_to_xy(lat, lon) for lat, lon in obj['coords']])
 
     if not all_xy:
-        st.error("❌ Tidak ada data dari KML/KMZ!")
+        st.error("❌ Tidak ada data dari KMZ!")
         return None
 
     shifted_all, (cx, cy) = apply_offset(all_xy)
 
-    # Isi kembali koordinat yang sudah di-offset
     idx = 0
-    for _, cat_items in classified.items():
+    for layer_name, cat_items in classified.items():
         for obj in cat_items:
             if obj['type'] == 'point':
                 obj['xy'] = shifted_all[idx]
                 idx += 1
             elif obj['type'] == 'path':
-                n = len(obj['coords'])
-                obj['xy_path'] = shifted_all[idx: idx + n]
-                idx += n
+                obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
+                idx += len(obj['coords'])
 
-    # Mapping layer DXF seperti semula
     layer_mapping = {
         "BOUNDARY": "FAT AREA",
         "DISTRIBUTION_CABLE": "FO 36 CORE",
@@ -247,16 +178,13 @@ def draw_to_template(classified, template_path):
 
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
-
         for obj in cat_items:
             if obj['type'] != 'point':
-                # Path/Polygon → polyline
                 msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
                 continue
 
             x, y = obj['xy']
 
-            # Label HP COVER / UNCOVER (warna & layer tetap)
             if layer_name == "HP_COVER":
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 6.0,
@@ -267,7 +195,7 @@ def draw_to_template(classified, template_path):
                 })
                 continue
 
-            if layer_name == "HP_UNCOVER":
+            elif layer_name == "HP_UNCOVER":
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 6.0,
                     "layer": "FEATURE_LABEL",
@@ -277,7 +205,6 @@ def draw_to_template(classified, template_path):
                 })
                 continue
 
-            # Block yang perlu di-insert
             block_name = None
             matchblock = None
 
@@ -299,9 +226,9 @@ def draw_to_template(classified, template_path):
             inserted_block = False
             if block_name:
                 try:
-                    scale_x = getattr(matchblock, "xscale", 1.0) if matchblock else 1.0
-                    scale_y = getattr(matchblock, "yscale", 1.0) if matchblock else 1.0
-                    scale_z = getattr(matchblock, "zscale", 1.0) if matchblock else 1.0
+                    scale_x = getattr(matchblock, "xscale", 1.0)
+                    scale_y = getattr(matchblock, "yscale", 1.0)
+                    scale_z = getattr(matchblock, "zscale", 1.0)
                     if layer_name == "FDT":
                         scale_x = scale_y = scale_z = 0.0025
                     msp.add_blockref(
@@ -327,7 +254,11 @@ def draw_to_template(classified, template_path):
                 ] else true_layer
 
                 text_color = 1 if text_layer == "FEATURE_LABEL" else 256
-                text_height = 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5
+
+                if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"]:
+                    text_height = 5.0
+                else:
+                    text_height = 1.5
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": text_height,
@@ -343,33 +274,24 @@ def run_kmz_to_dwg():
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
-1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ/KML SESUAI TEMPLATE</span>.<br>
-2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otomatis di dalam kode</code><br><br>
+1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
+2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
-
-    uploaded = st.file_uploader("📂 Upload File KMZ/KML", type=["kmz", "kml"])
+               
+    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
-    if uploaded and uploaded_template:
+    if uploaded_kmz and uploaded_template:
         extract_dir = "temp_kmz"
         os.makedirs(extract_dir, exist_ok=True)
         output_dxf = "converted_output.dxf"
 
-        # simpan template
         with open("template_ref.dxf", "wb") as f:
             f.write(uploaded_template.read())
 
         with st.spinner("🔍 Memproses data..."):
             try:
-                # Siapkan path KML dari input (KMZ atau KML)
-                if uploaded.name.lower().endswith(".kmz"):
-                    kml_path = extract_kmz(uploaded, extract_dir)
-                else:
-                    # KML langsung: simpan ke file sementara
-                    kml_path = os.path.join(extract_dir, "input.kml")
-                    with open(kml_path, "wb") as f:
-                        f.write(uploaded.read())
-
+                kml_path = extract_kmz(uploaded_kmz, extract_dir)
                 items = parse_kml(kml_path)
                 classified = classify_items(items)
                 updated_doc = draw_to_template(classified, "template_ref.dxf")
@@ -383,6 +305,4 @@ def run_kmz_to_dwg():
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
 
-# Jalankan di Streamlit:
-# if __name__ == "__main__":
-#     run_kmz_to_dwg()
+
