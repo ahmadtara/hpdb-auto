@@ -29,25 +29,37 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     def extract_placemarks(kmz_bytes):
-        def recurse_folder(folder, ns, path=""):
-            items = []
-            name_el = folder.find("kml:name", ns)
-            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
-            new_path = f"{path}/{folder_name}" if path else folder_name
-            for sub in folder.findall("kml:Folder", ns):
-                items += recurse_folder(sub, ns, new_path)
+        def recurse_folder(folder, ns):
+            placemarks = []
             for pm in folder.findall("kml:Placemark", ns):
-                nm = pm.find("kml:name", ns)
-                coord = pm.find(".//kml:coordinates", ns)
-                if nm is not None and coord is not None:
-                    lon, lat = coord.text.strip().split(",")[:2]
-                    items.append({
-                        "name": nm.text.strip(),
-                        "lat": float(lat),
-                        "lon": float(lon),
-                        "path": new_path
-                    })
-            return items
+                name = pm.findtext("kml:name", default="Unnamed", namespaces=ns)
+        
+                # Ambil semua koordinat
+                coords = pm.findall(".//kml:coordinates", ns)
+                for coord in coords:
+                    if coord is None or coord.text is None:
+                        continue  # skip kalau kosong
+        
+                    text = coord.text.strip()
+                    if not text:
+                        continue  # skip kalau kosong
+        
+                    parts = text.split(",")
+                    if len(parts) < 2:
+                        continue  # skip kalau tidak ada lon+lat
+        
+                    try:
+                        lon, lat = parts[:2]
+                        placemarks.append((name, float(lon), float(lat)))
+                    except Exception:
+                        continue  # skip kalau parsing gagal
+        
+            # Rekursif ke folder di dalam folder
+            for subfolder in folder.findall("kml:Folder", ns):
+                placemarks += recurse_folder(subfolder, ns)
+        
+            return placemarks
+
 
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
             f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
@@ -158,6 +170,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
