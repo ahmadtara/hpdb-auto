@@ -17,6 +17,8 @@ def run_hpdb(HERE_API_KEY):
 4️⃣ OLT CODE agar otomatis, di dalam Description FDT wajib diisi kode OLT.<br>
 5️⃣ Street tidak semua bisa terisi otomatis karena ada beberapa jalan di maps bertanda unnamed road.
 """, unsafe_allow_html=True)
+    # st.markdown("<h2 style='font-weight: normal;'>Hai, <b>{}</b>👋 <br> ✅CATATAN PENTING : <br> 1. TEMPLATE XLSX HARUS DI SESUAIKAN JUMLAHNYA DENGAN TOTAL HOMEPASS DARI KMZ <br> 2. BLOCK AGAR TERPISAH OTOMATIS HARUS PAKAI TITIK, CONTOH B.1 DAN A.1 <br> 3. Fitur Otomatis = FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass <br> 4. OLT CODE agar otomatis didalam Description FDT wajib di isi kode OLT <br> 5. Street tidak semua nya dapat terisi otomatis, krena ada beberapa jalan di maps unnamed road </h3>".format(st.session_state.get("user", "User")), unsafe_allow_html=True)
+
 
     if st.button("🔒 Logout"):
         st.session_state["logged_in"] = False
@@ -26,64 +28,38 @@ def run_hpdb(HERE_API_KEY):
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-    # ===== EXTRACT PLACEMARKS AMAN =====
     def extract_placemarks(kmz_bytes):
         def recurse_folder(folder, ns, path=""):
-            placemarks = []
-            folder_name_el = folder.find("kml:name", ns)
-            folder_name = folder_name_el.text.strip() if folder_name_el is not None else "UNKNOWN"
+            items = []
+            name_el = folder.find("kml:name", ns)
+            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
             new_path = f"{path}/{folder_name}" if path else folder_name
-
-            # Ambil semua placemark
-            for pm in folder.findall("kml:Placemark", ns):
-                name_el = pm.find("kml:name", ns)
-                name = name_el.text.strip() if name_el is not None else "Unnamed"
-
-                coords = pm.findall(".//kml:coordinates", ns)
-                for coord in coords:
-                    if coord is None or coord.text is None:
-                        continue
-                    text = coord.text.strip()
-                    if not text:
-                        continue
-                    parts = text.split(",")
-                    if len(parts) < 2:
-                        continue
-                    try:
-                        lon, lat = float(parts[0]), float(parts[1])
-                        placemarks.append({
-                            "name": name,
-                            "lat": lat,
-                            "lon": lon,
-                            "path": new_path
-                        })
-                    except ValueError:
-                        continue  # skip kalau parsing gagal
-
-            # Rekursif ke folder dalam folder
             for sub in folder.findall("kml:Folder", ns):
-                placemarks += recurse_folder(sub, ns, new_path)
-
-            return placemarks
+                items += recurse_folder(sub, ns, new_path)
+            for pm in folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                coord = pm.find(".//kml:coordinates", ns)
+                if nm is not None and coord is not None:
+                    lon, lat = coord.text.strip().split(",")[:2]
+                    items.append({
+                        "name": nm.text.strip(),
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "path": new_path
+                    })
+            return items
 
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-            kml_files = [f for f in z.namelist() if f.lower().endswith(".kml")]
-            if not kml_files:
-                raise FileNotFoundError("Tidak ada file KML di dalam KMZ")
-            f = kml_files[0]
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
             root = ET.parse(z.open(f)).getroot()
             ns = {"kml": "http://www.opengis.net/kml/2.2"}
-
             all_pm = []
             for folder in root.findall(".//kml:Folder", ns):
                 all_pm += recurse_folder(folder, ns)
-
-            # Grouping by category
             data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
             for p in all_pm:
-                path = p.get("path", "")
                 for k in data:
-                    if k in path:
+                    if k in p["path"]:
                         data[k].append(p)
                         break
             return data
@@ -107,12 +83,10 @@ def run_hpdb(HERE_API_KEY):
             }
         return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-    # ===== MAIN PROCESS =====
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
         df = pd.read_excel(template_file)
-
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
@@ -122,11 +96,10 @@ def run_hpdb(HERE_API_KEY):
         fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
         oltcode = "UNKNOWN"
 
-        # Ambil OLT dari FDT description
         if fdt:
             with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-                kml_file = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-                tree = ET.parse(z.open(kml_file))
+                f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+                tree = ET.parse(z.open(f))
                 root = tree.getroot()
                 ns = {"kml": "http://www.opengis.net/kml/2.2"}
                 for pm in root.findall(".//kml:Placemark", ns):
@@ -144,7 +117,6 @@ def run_hpdb(HERE_API_KEY):
             if col not in df.columns:
                 df[col] = ""
 
-        # ===== Populate dataframe =====
         for i, h in enumerate(hp):
             if i >= len(df): break
             fc = extract_fatcode(h["path"])
@@ -163,10 +135,8 @@ def run_hpdb(HERE_API_KEY):
             df.at[i, "postalcode"] = rc["postalcode"]
             df.at[i, "fdtcode"] = fdtcode
             df.at[i, "oltcode"] = oltcode
-
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
-
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
@@ -180,7 +150,6 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
-
             progress.progress(int((i + 1) * 100 / total))
 
         progress.empty()
@@ -189,3 +158,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
+
+
+
