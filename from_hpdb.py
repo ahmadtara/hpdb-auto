@@ -28,7 +28,34 @@ def run_hpdb(HERE_API_KEY):
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-    def extract_placemarks(kmz_bytes):
+        def extract_placemarks(kmz_bytes):
+        def first_lonlat_from_pm(pm, ns):
+            # Prioritaskan Point, fallback ke LineString/Polygon
+            for xpath in [
+                "./kml:Point/kml:coordinates",
+                "./kml:LineString/kml:coordinates",
+                "./kml:Polygon//kml:coordinates",
+                ".//kml:coordinates"
+            ]:
+                el = pm.find(xpath, ns)
+                if el is None or el.text is None:
+                    continue
+                # Normalisasi whitespace
+                txt = " ".join(el.text.split())
+                # Pisahkan per pasangan lon,lat[,alt] (spasi/newline)
+                tokens = [t for t in txt.split(" ") if "," in t]
+                if not tokens:
+                    continue
+                parts = tokens[0].split(",")  # ambil pasangan pertama
+                if len(parts) >= 2:
+                    try:
+                        lon = float(parts[0])
+                        lat = float(parts[1])
+                        return lon, lat
+                    except ValueError:
+                        continue
+            return None  # tidak ada koordinat valid
+
         def recurse_folder(folder, ns, path=""):
             items = []
             name_el = folder.find("kml:name", ns)
@@ -38,15 +65,18 @@ def run_hpdb(HERE_API_KEY):
                 items += recurse_folder(sub, ns, new_path)
             for pm in folder.findall("kml:Placemark", ns):
                 nm = pm.find("kml:name", ns)
-                coord = pm.find(".//kml:coordinates", ns)
-                if nm is not None and coord is not None:
-                    lon, lat = coord.text.strip().split(",")[:2]
-                    items.append({
-                        "name": nm.text.strip(),
-                        "lat": float(lat),
-                        "lon": float(lon),
-                        "path": new_path
-                    })
+                if nm is None:
+                    continue
+                first = first_lonlat_from_pm(pm, ns)
+                if first is None:
+                    continue  # skip placemark tanpa koordinat valid
+                lon, lat = first
+                items.append({
+                    "name": nm.text.strip(),
+                    "lat": lat,
+                    "lon": lon,
+                    "path": new_path
+                })
             return items
 
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
@@ -63,6 +93,7 @@ def run_hpdb(HERE_API_KEY):
                         data[k].append(p)
                         break
             return data
+
 
     def extract_fatcode(path):
         for part in path.split("/"):
@@ -158,6 +189,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
