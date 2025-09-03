@@ -17,8 +17,6 @@ def run_hpdb(HERE_API_KEY):
 4️⃣ OLT CODE agar otomatis, di dalam Description FDT wajib diisi kode OLT.<br>
 5️⃣ Street tidak semua bisa terisi otomatis karena ada beberapa jalan di maps bertanda unnamed road.
 """, unsafe_allow_html=True)
-    # st.markdown("<h2 style='font-weight: normal;'>Hai, <b>{}</b>👋 <br> ✅CATATAN PENTING : <br> 1. TEMPLATE XLSX HARUS DI SESUAIKAN JUMLAHNYA DENGAN TOTAL HOMEPASS DARI KMZ <br> 2. BLOCK AGAR TERPISAH OTOMATIS HARUS PAKAI TITIK, CONTOH B.1 DAN A.1 <br> 3. Fitur Otomatis = FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass <br> 4. OLT CODE agar otomatis didalam Description FDT wajib di isi kode OLT <br> 5. Street tidak semua nya dapat terisi otomatis, krena ada beberapa jalan di maps unnamed road </h3>".format(st.session_state.get("user", "User")), unsafe_allow_html=True)
-
 
     if st.button("🔒 Logout"):
         st.session_state["logged_in"] = False
@@ -28,7 +26,10 @@ def run_hpdb(HERE_API_KEY):
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-        def extract_placemarks(kmz_bytes):
+    # ------------------------------
+    # Perbaikan fungsi extract_placemarks
+    # ------------------------------
+    def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
             # Prioritaskan Point, fallback ke LineString/Polygon
             for xpath in [
@@ -40,9 +41,7 @@ def run_hpdb(HERE_API_KEY):
                 el = pm.find(xpath, ns)
                 if el is None or el.text is None:
                     continue
-                # Normalisasi whitespace
-                txt = " ".join(el.text.split())
-                # Pisahkan per pasangan lon,lat[,alt] (spasi/newline)
+                txt = " ".join(el.text.split())  # normalisasi whitespace
                 tokens = [t for t in txt.split(" ") if "," in t]
                 if not tokens:
                     continue
@@ -93,7 +92,6 @@ def run_hpdb(HERE_API_KEY):
                         data[k].append(p)
                         break
             return data
-
 
     def extract_fatcode(path):
         for part in path.split("/"):
@@ -189,8 +187,3 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
-
-
-
-
