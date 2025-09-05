@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import zipfile
-import xml.etree.ElementTree as ET
+from lxml import etree   # pakai lxml bukan xml.etree
 from io import BytesIO
 import requests
 
@@ -27,11 +27,10 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # ------------------------------
-    # Perbaikan fungsi extract_placemarks
+    # Extract placemarks pakai lxml
     # ------------------------------
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
-            # Prioritaskan Point, fallback ke LineString/Polygon
             for xpath in [
                 "./kml:Point/kml:coordinates",
                 "./kml:LineString/kml:coordinates",
@@ -41,11 +40,11 @@ def run_hpdb(HERE_API_KEY):
                 el = pm.find(xpath, ns)
                 if el is None or el.text is None:
                     continue
-                txt = " ".join(el.text.split())  # normalisasi whitespace
+                txt = " ".join(el.text.split())
                 tokens = [t for t in txt.split(" ") if "," in t]
                 if not tokens:
                     continue
-                parts = tokens[0].split(",")  # ambil pasangan pertama
+                parts = tokens[0].split(",")
                 if len(parts) >= 2:
                     try:
                         lon = float(parts[0])
@@ -53,7 +52,7 @@ def run_hpdb(HERE_API_KEY):
                         return lon, lat
                     except ValueError:
                         continue
-            return None  # tidak ada koordinat valid
+            return None
 
         def recurse_folder(folder, ns, path=""):
             items = []
@@ -68,7 +67,7 @@ def run_hpdb(HERE_API_KEY):
                     continue
                 first = first_lonlat_from_pm(pm, ns)
                 if first is None:
-                    continue  # skip placemark tanpa koordinat valid
+                    continue
                 lon, lat = first
                 items.append({
                     "name": nm.text.strip(),
@@ -80,12 +79,16 @@ def run_hpdb(HERE_API_KEY):
 
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
             f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-            root = ET.parse(z.open(f)).getroot()
+            parser = etree.XMLParser(recover=True)
+            root = etree.parse(z.open(f), parser=parser).getroot()
             ns = {"kml": "http://www.opengis.net/kml/2.2"}
             all_pm = []
             for folder in root.findall(".//kml:Folder", ns):
                 all_pm += recurse_folder(folder, ns)
-            data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
+            data = {k: [] for k in [
+                "FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3",
+                "EXISTING POLE EMR 7-4", "FDT", "HP COVER"
+            ]}
             for p in all_pm:
                 for k in data:
                     if k in p["path"]:
@@ -119,17 +122,22 @@ def run_hpdb(HERE_API_KEY):
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
-        all_poles = placemarks["NEW POLE 7-3"] + placemarks["EXISTING POLE EMR 7-3"] + placemarks["EXISTING POLE EMR 7-4"]
+        all_poles = (
+            placemarks["NEW POLE 7-3"]
+            + placemarks["EXISTING POLE EMR 7-3"]
+            + placemarks["EXISTING POLE EMR 7-4"]
+        )
 
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
         fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
         oltcode = "UNKNOWN"
 
+        # Cari OLT dari description FDT
         if fdt:
             with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
                 f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-                tree = ET.parse(z.open(f))
-                root = tree.getroot()
+                parser = etree.XMLParser(recover=True)
+                root = etree.parse(z.open(f), parser=parser).getroot()
                 ns = {"kml": "http://www.opengis.net/kml/2.2"}
                 for pm in root.findall(".//kml:Placemark", ns):
                     name_el = pm.find("kml:name", ns)
@@ -147,9 +155,11 @@ def run_hpdb(HERE_API_KEY):
                 df[col] = ""
 
         for i, h in enumerate(hp):
-            if i >= len(df): break
+            if i >= len(df): 
+                break
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
+
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -157,6 +167,7 @@ def run_hpdb(HERE_API_KEY):
             else:
                 df.at[i, "block"] = ""
                 df.at[i, "homenumber"] = h["name"]
+
             df.at[i, "Latitude_homepass"] = h["lat"]
             df.at[i, "Longitude_homepass"] = h["lon"]
             df.at[i, "district"] = rc["district"]
@@ -164,14 +175,19 @@ def run_hpdb(HERE_API_KEY):
             df.at[i, "postalcode"] = rc["postalcode"]
             df.at[i, "fdtcode"] = fdtcode
             df.at[i, "oltcode"] = oltcode
+
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
+
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
                 df.at[i, "Pole Latitude"] = mf["lat"]
                 df.at[i, "Pole Longitude"] = mf["lon"]
-                pol = next((p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4), "POLE_NOT_FOUND")
+                pol = next(
+                    (p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4),
+                    "POLE_NOT_FOUND"
+                )
                 df.at[i, "Pole ID"] = pol
                 fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
                 df.at[i, "FAT Address"] = fataddr
@@ -179,6 +195,7 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
+
             progress.progress(int((i + 1) * 100 / total))
 
         progress.empty()
