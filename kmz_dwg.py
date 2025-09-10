@@ -1,127 +1,80 @@
 import streamlit as st
 import zipfile
 import os
-from xml.etree import ElementTree as ET
+from lxml import etree as ET
 import ezdxf
 from pyproj import Transformer
-import re
-import tempfile
-import shutil
 
+# Transformasi koordinat
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
+# Target folder yang dipakai
 target_folders = {
     'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
-# --------------------
-# Cleaner: hapus prefix asing tapi PERTAHANKAN kml:
-# --------------------
-def clean_kml_preserve_kml(kml_path):
-    """
-    Membersihkan prefix namespace yang bukan 'kml' dari tag, atribut, dan deklarasi xmlns.
-    Contoh: <gx:Track> -> <Track>, tapi <kml:Folder> tetap dipertahankan.
-    """
-    with open(kml_path, "r", encoding="utf-8-sig") as f:
-        content = f.read()
-
-    # 1) Hapus prefix pada tag kecuali kml:
-    #    <gx:Tag ...> -> <Tag ...>
-    #    </gx:Tag>     -> </Tag>
-    content = re.sub(r"<(/?)(?!kml:)([A-Za-z0-9_]+):", r"<\1", content)
-
-    # 2) Hapus atribut dengan prefix non-kml, misal gx:attr="..." -> hilang
-    content = re.sub(r"\s+(?!kml:)[A-Za-z0-9_]+:[A-Za-z0-9_]+=\"[^\"]*\"", "", content)
-
-    # 3) Hapus xmlns declarations non-kml: xmlns:gx="..." -> hilang, tapi jangan hapus xmlns:kml
-    content = re.sub(r"\s+xmlns:(?!kml)[A-Za-z0-9_]+=\"[^\"]*\"", "", content)
-
-    # 4) Jika ada deklarasi default yang aneh (jarang), tidak disentuh.
-    # Simpan kembali
-    with open(kml_path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-# --------------------
-# Extract KMZ dan bersihkan KML
-# --------------------
-def extract_kmz(kmz_path, extract_dir):
-    """
-    Mengekstrak KMZ dan membersihkan doc.kml supaya tidak ada prefix asing
-    yang bikin `unbound prefix` saat parsing.
-    """
-    # pastikan folder kosong
-    if os.path.exists(extract_dir):
-        shutil.rmtree(extract_dir)
-    os.makedirs(extract_dir, exist_ok=True)
-
-    # uploaded kmz_path bisa berupa file-like (Streamlit Upload). handle accordingly:
-    if hasattr(kmz_path, "read"):
-        # Streamlit UploadedFileIO -> simpan sementara ke file
-        tmp_kmz = os.path.join(extract_dir, "uploaded.kmz")
-        with open(tmp_kmz, "wb") as fw:
-            kmz_path.seek(0)
-            fw.write(kmz_path.read())
-        kmz_to_open = tmp_kmz
-    else:
-        kmz_to_open = kmz_path
-
-    with zipfile.ZipFile(kmz_to_open, 'r') as kmz_file:
-        kmz_file.extractall(extract_dir)
-
-    kml_candidate = os.path.join(extract_dir, "doc.kml")
-    # cari file .kml bila nama lain
-    if not os.path.exists(kml_candidate):
-        for root_dir, dirs, files in os.walk(extract_dir):
-            for fn in files:
-                if fn.lower().endswith(".kml"):
-                    kml_candidate = os.path.join(root_dir, fn)
-                    break
-
-    # lakukan pembersihan namespace kecuali kml:
-    clean_kml_preserve_kml(kml_candidate)
-    return kml_candidate
-
-
-# --------------------
-# Parsing KML -> items
-# --------------------
-def parse_kml(kml_path):
-    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
-    # gunakan ET.parse setelah file sudah dibersihkan
-    tree = ET.parse(kml_path)
+# ====== Bersihkan namespace ======
+def strip_namespace(file_path):
+    parser = ET.XMLParser(recover=True, encoding="utf-8")
+    tree = ET.parse(file_path, parser)
     root = tree.getroot()
-    folders = root.findall('.//kml:Folder', ns)
+
+    for elem in root.getiterator():
+        if not hasattr(elem.tag, 'find'):
+            continue
+        i = elem.tag.find('}')
+        if i >= 0:
+            elem.tag = elem.tag[i+1:]
+    for at in list(root.attrib.keys()):
+        if at.startswith("xmlns:") or at == "xmlns":
+            del root.attrib[at]
+
+    tree.write(file_path, encoding="utf-8", xml_declaration=True)
+
+# ====== Extract KMZ ======
+def extract_kmz(kmz_path, extract_dir):
+    with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
+        kmz_file.extractall(extract_dir)
+    return os.path.join(extract_dir, "doc.kml")
+
+# ====== Parse KML ======
+def parse_kml(kml_path):
+    strip_namespace(kml_path)
+    parser = ET.XMLParser(recover=True, encoding="utf-8")
+    tree = ET.parse(kml_path, parser)
+    root = tree.getroot()
+
+    folders = root.findall('.//Folder')
     items = []
     for folder in folders:
-        folder_name_tag = folder.find('kml:name', ns)
-        if folder_name_tag is None or folder_name_tag.text is None:
+        folder_name_tag = folder.find('name')
+        if folder_name_tag is None:
             continue
         folder_name = folder_name_tag.text.strip().upper()
         if folder_name not in target_folders:
             continue
-        placemarks = folder.findall('.//kml:Placemark', ns)
-        for pm in placemarks:
-            name = pm.find('kml:name', ns)
-            name_text = name.text.strip() if (name is not None and name.text) else ""
 
-            point_coord = pm.find('.//kml:Point/kml:coordinates', ns)
-            if point_coord is not None and point_coord.text:
-                parts = point_coord.text.strip().split(',')
-                lon, lat = float(parts[0]), float(parts[1])
+        placemarks = folder.findall('.//Placemark')
+        for pm in placemarks:
+            name = pm.find('name')
+            name_text = name.text.strip() if name is not None else ""
+
+            point_coord = pm.find('.//Point/coordinates')
+            if point_coord is not None:
+                lon, lat, *_ = point_coord.text.strip().split(',')
                 items.append({
                     'type': 'point',
                     'name': name_text,
-                    'latitude': lat,
-                    'longitude': lon,
+                    'latitude': float(lat),
+                    'longitude': float(lon),
                     'folder': folder_name
                 })
                 continue
 
-            line_coord = pm.find('.//kml:LineString/kml:coordinates', ns)
-            if line_coord is not None and line_coord.text:
+            line_coord = pm.find('.//LineString/coordinates')
+            if line_coord is not None:
                 coords = []
                 for c in line_coord.text.strip().split():
                     lon, lat, *_ = c.split(',')
@@ -134,8 +87,8 @@ def parse_kml(kml_path):
                 })
                 continue
 
-            poly_coord = pm.find('.//kml:Polygon//kml:coordinates', ns)
-            if poly_coord is not None and poly_coord.text:
+            poly_coord = pm.find('.//Polygon//coordinates')
+            if poly_coord is not None:
                 coords = []
                 for c in poly_coord.text.strip().split():
                     lon, lat, *_ = c.split(',')
@@ -148,10 +101,9 @@ def parse_kml(kml_path):
                 })
     return items
 
-
+# ====== Helper ======
 def latlon_to_xy(lat, lon):
     return transformer.transform(lon, lat)
-
 
 def apply_offset(points_xy):
     xs = [x for x, y in points_xy]
@@ -159,7 +111,7 @@ def apply_offset(points_xy):
     cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
     return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
 
-
+# ====== Classify ======
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
@@ -193,7 +145,7 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-
+# ====== Drawing ke Template DXF ======
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
@@ -344,7 +296,7 @@ def draw_to_template(classified, template_path):
 
     return doc
 
-
+# ====== Main App ======
 def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD ")
     st.markdown("""
@@ -353,18 +305,16 @@ def run_kmz_to_dwg():
 1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
 2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otomatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
-               
+
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
     if uploaded_kmz and uploaded_template:
-        # buat temp dir
-        extract_dir = tempfile.mkdtemp()
+        extract_dir = "temp_kmz"
+        os.makedirs(extract_dir, exist_ok=True)
         output_dxf = "converted_output.dxf"
 
-        # simpan template
-        template_path = os.path.join(extract_dir, "template_ref.dxf")
-        with open(template_path, "wb") as f:
+        with open("template_ref.dxf", "wb") as f:
             f.write(uploaded_template.read())
 
         with st.spinner("🔍 Memproses data..."):
@@ -372,7 +322,7 @@ def run_kmz_to_dwg():
                 kml_path = extract_kmz(uploaded_kmz, extract_dir)
                 items = parse_kml(kml_path)
                 classified = classify_items(items)
-                updated_doc = draw_to_template(classified, template_path)
+                updated_doc = draw_to_template(classified, "template_ref.dxf")
                 if updated_doc:
                     updated_doc.saveas(output_dxf)
 
@@ -382,13 +332,3 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
-            finally:
-                # cleanup temporaries
-                try:
-                    shutil.rmtree(extract_dir)
-                except Exception:
-                    pass
-
-# jika dijalankan langsung
-if __name__ == "__main__":
-    run_kmz_to_dwg()
