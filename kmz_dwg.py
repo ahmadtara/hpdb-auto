@@ -1,67 +1,43 @@
 import streamlit as st
 import zipfile
 import os
-from lxml import etree as ET
+from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
 
-# Transformasi koordinat
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
-# Target folder yang dipakai
 target_folders = {
     'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
-# ====== Bersihkan namespace ======
-def strip_namespace(file_path):
-    parser = ET.XMLParser(recover=True, encoding="utf-8")
-    tree = ET.parse(file_path, parser)
-    root = tree.getroot()
-
-    for elem in root.getiterator():
-        if not hasattr(elem.tag, 'find'):
-            continue
-        i = elem.tag.find('}')
-        if i >= 0:
-            elem.tag = elem.tag[i+1:]
-    for at in list(root.attrib.keys()):
-        if at.startswith("xmlns:") or at == "xmlns":
-            del root.attrib[at]
-
-    tree.write(file_path, encoding="utf-8", xml_declaration=True)
-
-# ====== Extract KMZ ======
 def extract_kmz(kmz_path, extract_dir):
     with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
         kmz_file.extractall(extract_dir)
     return os.path.join(extract_dir, "doc.kml")
 
-# ====== Parse KML ======
 def parse_kml(kml_path):
-    strip_namespace(kml_path)
-    parser = ET.XMLParser(recover=True, encoding="utf-8")
-    tree = ET.parse(kml_path, parser)
+    ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+    with open(kml_path, 'rb') as f:
+        tree = ET.parse(f)
     root = tree.getroot()
-
-    folders = root.findall('.//Folder')
+    folders = root.findall('.//kml:Folder', ns)
     items = []
     for folder in folders:
-        folder_name_tag = folder.find('name')
+        folder_name_tag = folder.find('kml:name', ns)
         if folder_name_tag is None:
             continue
         folder_name = folder_name_tag.text.strip().upper()
         if folder_name not in target_folders:
             continue
-
-        placemarks = folder.findall('.//Placemark')
+        placemarks = folder.findall('.//kml:Placemark', ns)
         for pm in placemarks:
-            name = pm.find('name')
+            name = pm.find('kml:name', ns)
             name_text = name.text.strip() if name is not None else ""
 
-            point_coord = pm.find('.//Point/coordinates')
+            point_coord = pm.find('.//kml:Point/kml:coordinates', ns)
             if point_coord is not None:
                 lon, lat, *_ = point_coord.text.strip().split(',')
                 items.append({
@@ -73,7 +49,7 @@ def parse_kml(kml_path):
                 })
                 continue
 
-            line_coord = pm.find('.//LineString/coordinates')
+            line_coord = pm.find('.//kml:LineString/kml:coordinates', ns)
             if line_coord is not None:
                 coords = []
                 for c in line_coord.text.strip().split():
@@ -87,7 +63,7 @@ def parse_kml(kml_path):
                 })
                 continue
 
-            poly_coord = pm.find('.//Polygon//coordinates')
+            poly_coord = pm.find('.//kml:Polygon//kml:coordinates', ns)
             if poly_coord is not None:
                 coords = []
                 for c in poly_coord.text.strip().split():
@@ -101,7 +77,6 @@ def parse_kml(kml_path):
                 })
     return items
 
-# ====== Helper ======
 def latlon_to_xy(lat, lon):
     return transformer.transform(lon, lat)
 
@@ -111,7 +86,6 @@ def apply_offset(points_xy):
     cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
     return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
 
-# ====== Classify ======
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
@@ -145,7 +119,26 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-# ====== Drawing ke Template DXF ======
+def angle_from_line(line: LineString, point: Point):
+    # Ambil titik terdekat di garis
+    nearest_point = line.interpolate(line.project(point))
+    # Cari segmen di sekitar titik terdekat
+    coords = list(line.coords)
+    min_dist = float("inf")
+    closest_seg = None
+    for i in range(len(coords) - 1):
+        seg = LineString([coords[i], coords[i+1]])
+        d = seg.distance(nearest_point)
+        if d < min_dist:
+            min_dist = d
+            closest_seg = seg
+    if closest_seg is None:
+        return 0.0
+    (x1, y1), (x2, y2) = closest_seg.coords
+    angle_rad = math.atan2(y2 - y1, x2 - x1)
+    angle_deg = math.degrees(angle_rad)
+    return angle_deg
+
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
@@ -156,9 +149,9 @@ def draw_to_template(classified, template_path):
     for e in msp:
         if e.dxftype() == 'TEXT':
             txt = e.dxf.text.upper()
-            if 'NN-' in txt:
+            if 'NN-110' in txt:
                 matchprop_hp = e.dxf
-            elif 'MR.SRMRW16' in txt:
+            elif 'MR.SRMRW16.P112' in txt:
                 matchprop_pole = e.dxf
             elif 'SRMRW16.067.B01' in txt:
                 matchprop_sr = e.dxf
@@ -203,6 +196,12 @@ def draw_to_template(classified, template_path):
         "JALAN": "JALAN"
     }
 
+    # Simpan garis kotak untuk referensi arah
+    kotak_lines = []
+    for obj in classified.get("KOTAK", []):
+        if obj['type'] == 'path':
+            kotak_lines.append(LineString(obj['xy_path']))
+
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
@@ -211,24 +210,30 @@ def draw_to_template(classified, template_path):
                 continue
 
             x, y = obj['xy']
+            rotation = 0
+
+            if layer_name in ["HP_COVER", "HP_UNCOVER"] and kotak_lines:
+                hp_point = Point(x, y)
+                nearest_line = min(kotak_lines, key=lambda l: l.distance(hp_point))
+                rotation = angle_from_line(nearest_line, hp_point)
 
             if layer_name == "HP_COVER":
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 6.0,
+                    "height": 5.0,
                     "layer": "FEATURE_LABEL",
                     "color": 6,
                     "insert": (x - 2.2, y - 0.9),
-                    "rotation": 0
+                    "rotation": rotation
                 })
                 continue
 
             elif layer_name == "HP_UNCOVER":
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 6.0,
+                    "height": 4.0,
                     "layer": "FEATURE_LABEL",
-                    "color": 2,
+                    "color": 7,
                     "insert": (x - 2.2, y - 0.9),
-                    "rotation": 0
+                    "rotation": rotation
                 })
                 continue
 
@@ -296,16 +301,15 @@ def draw_to_template(classified, template_path):
 
     return doc
 
-# ====== Main App ======
 def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD ")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
 1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
-2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otomatis didalam kode</code><br><br>
+2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
-
+               
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
@@ -332,3 +336,5 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
+
