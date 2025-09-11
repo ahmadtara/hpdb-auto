@@ -121,14 +121,24 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-def get_longest_line(lines):
-    """Ambil garis terpanjang dari list LineString"""
-    if not lines:
-        return None
-    return max(lines, key=lambda l: l.length)
+import math
+from shapely.geometry import Point, LineString, Polygon
+
+def get_longest_line(coords):
+    """Cari segmen terpanjang dari koordinat polyline"""
+    longest = None
+    max_len = 0
+    for i in range(len(coords) - 1):
+        seg = LineString([coords[i], coords[i+1]])
+        if seg.length > max_len:
+            max_len = seg.length
+            longest = seg
+    return longest
 
 def angle_from_line(line: LineString, point: Point):
     """Hitung sudut rotasi dari segmen terdekat suatu garis"""
+    if line is None:
+        return 0.0
     nearest_point = line.interpolate(line.project(point))
     coords = list(line.coords)
     min_dist = float("inf")
@@ -143,9 +153,23 @@ def angle_from_line(line: LineString, point: Point):
         return 0.0
     (x1, y1), (x2, y2) = closest_seg.coords
     angle_rad = math.atan2(y2 - y1, x2 - x1)
-    angle_deg = math.degrees(angle_rad)
-    return angle_deg
+    return math.degrees(angle_rad)
 
+def get_homepass_center_and_angle(line: LineString):
+    """Kalau polyline tertutup → pakai centroid & sisi terpanjang, kalau terbuka → midpoint"""
+    coords = list(line.coords)
+    if len(coords) > 3 and coords[0] == coords[-1]:  
+        # polyline tertutup
+        poly = Polygon(coords)
+        center = poly.centroid
+        longest = get_longest_line(coords)
+        angle = angle_from_line(longest, center)
+        return center, angle
+    else:
+        # polyline terbuka
+        center = line.interpolate(0.5, normalized=True)
+        angle = angle_from_line(line, center)
+        return center, angle
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
@@ -206,10 +230,9 @@ def draw_to_template(classified, template_path):
 
     # Ambil semua garis HOMEPASS untuk referensi rotasi HP
     homepass_lines = []
-    for obj in classified.get("KOTAK", []):  # KOTAK dipetakan jadi GARIS HOMEPASS
+    for obj in classified.get("KOTAK", []):  # KOTAK dipetakan ke GARIS HOMEPASS
         if obj['type'] == 'path' and len(obj['xy_path']) >= 2:
             homepass_lines.append(LineString(obj['xy_path']))
-    longest_homepass = get_longest_line(homepass_lines)
 
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
@@ -224,26 +247,27 @@ def draw_to_template(classified, template_path):
 
             x, y = obj['xy']
 
-            # ============ HP COVER & UNCOVER dengan rotasi ============
+            # ============ HP COVER & UNCOVER dengan rotasi + posisi tengah ============
             if layer_name in ["HP_COVER", "HP_UNCOVER"]:
                 rotation = 0.0
-                hp_point = Point(x, y)
+                insert_point = (x, y)
 
                 if homepass_lines:
+                    # pilih garis terdekat
+                    hp_point = Point(x, y)
                     nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
-                    # Kalau terlalu jauh (>20m misalnya), pakai garis terpanjang
-                    if nearest_line.distance(hp_point) > 20 and longest_homepass:
-                        nearest_line = longest_homepass
-                    rotation = angle_from_line(nearest_line, hp_point)
+                    center, angle = get_homepass_center_and_angle(nearest_line)
+                    insert_point = (center.x, center.y)
+                    rotation = angle
 
-                text_height = 5.0 if layer_name == "HP_COVER" else 4.0
+                text_height = 3.0 if layer_name == "HP_COVER" else 4.0
                 text_color = 6 if layer_name == "HP_COVER" else 7
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": text_height,
                     "layer": "FEATURE_LABEL",
                     "color": text_color,
-                    "insert": (x - 2.2, y - 0.9),
+                    "insert": insert_point,
                     "rotation": rotation
                 })
                 continue
@@ -300,9 +324,9 @@ def draw_to_template(classified, template_path):
                 text_color = 1 if text_layer == "FEATURE_LABEL" else 256
 
                 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"]:
-                    text_height = 5.0
+                    text_height = 3.0
                 else:
-                    text_height = 1.5
+                    text_height = 1.0
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": text_height,
@@ -312,6 +336,7 @@ def draw_to_template(classified, template_path):
                 })
 
     return doc
+
 
 def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD ")
@@ -348,6 +373,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
