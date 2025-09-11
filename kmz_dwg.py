@@ -203,11 +203,17 @@ def draw_to_template(classified, template_path):
             kotak_lines.append(LineString(obj['xy_path']))
 
     for layer_name, cat_items in classified.items():
-        true_layer = layer_mapping.get(layer_name, layer_name)
-        for obj in cat_items:
-            if obj['type'] != 'point':
+    true_layer = layer_mapping.get(layer_name, layer_name)
+    for obj in cat_items:
+        if obj['type'] != 'point':
+            # ✅ Cegah error "IllegalArgumentException"
+            if len(obj['xy_path']) >= 2:
                 msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                continue
+            elif len(obj['xy_path']) == 1:
+                # kalau hanya 1 titik → bikin circle kecil
+                msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
+            continue
+
 
             x, y = obj['xy']
 
@@ -339,6 +345,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
