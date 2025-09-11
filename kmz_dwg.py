@@ -229,7 +229,7 @@ def draw_to_template(classified, template_path):
                     rotation = longest_segment_angle(list(nearest_line.coords))
 
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 6.0,
+                    "height": 3.0,
                     "layer": "FEATURE_LABEL",
                     "color": 6,
                     "insert": (x, y),   # posisi asli tetap
@@ -246,7 +246,7 @@ def draw_to_template(classified, template_path):
                     rotation = longest_segment_angle(list(nearest_line.coords))
 
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 4.0,
+                    "height": 2.0,
                     "layer": "FEATURE_LABEL",
                     "color": 7,
                     "insert": (x, y),   # posisi asli tetap
@@ -305,7 +305,7 @@ def draw_to_template(classified, template_path):
                 ] else true_layer
 
                 text_color = 1 if text_layer == "FEATURE_LABEL" else 256
-                text_height = 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5
+                text_height = 3.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": text_height,
@@ -353,6 +353,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
