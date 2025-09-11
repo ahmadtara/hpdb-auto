@@ -120,9 +120,7 @@ def classify_items(items):
     return classified
 
 def angle_from_line(line: LineString, point: Point):
-    # Ambil titik terdekat di garis
     nearest_point = line.interpolate(line.project(point))
-    # Cari segmen di sekitar titik terdekat
     coords = list(line.coords)
     min_dist = float("inf")
     closest_seg = None
@@ -149,9 +147,9 @@ def draw_to_template(classified, template_path):
     for e in msp:
         if e.dxftype() == 'TEXT':
             txt = e.dxf.text.upper()
-            if 'NN-110' in txt:
+            if 'NN-' in txt:
                 matchprop_hp = e.dxf
-            elif 'MR.SRMRW16.P112' in txt:
+            elif 'MR.SRMRW16' in txt:
                 matchprop_pole = e.dxf
             elif 'SRMRW16.067.B01' in txt:
                 matchprop_sr = e.dxf
@@ -196,7 +194,7 @@ def draw_to_template(classified, template_path):
         "JALAN": "JALAN"
     }
 
-    # Simpan garis kotak untuk referensi arah
+    # Siapkan garis "KOTAK" untuk referensi arah
     kotak_lines = []
     for obj in classified.get("KOTAK", []):
         if obj['type'] == 'path':
@@ -210,16 +208,19 @@ def draw_to_template(classified, template_path):
                 continue
 
             x, y = obj['xy']
+
+            # Default rotation 0
             rotation = 0
 
             if layer_name in ["HP_COVER", "HP_UNCOVER"] and kotak_lines:
                 hp_point = Point(x, y)
+                # Cari garis kotak terdekat
                 nearest_line = min(kotak_lines, key=lambda l: l.distance(hp_point))
                 rotation = angle_from_line(nearest_line, hp_point)
 
             if layer_name == "HP_COVER":
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 5.0,
+                    "height": 4.0,
                     "layer": "FEATURE_LABEL",
                     "color": 6,
                     "insert": (x - 2.2, y - 0.9),
