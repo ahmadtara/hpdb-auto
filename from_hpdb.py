@@ -13,7 +13,7 @@ def run_hpdb(HERE_API_KEY):
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
 1️⃣ <span style='color:#FF6B6B;'>TEMPLATE XLSX</span> harus disesuaikan jumlahnya dengan total homepass dari KMZ.<br>
 2️⃣ Block agar terpisah otomatis harus pakai titik, contoh <code>B.1</code> dan <code>A.1</code>.<br>
-3️⃣ Fitur otomatis: <span style='color:#34C759;'>FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass</span>.<br>
+3️⃣ Fitur otomatis: <span style='color:#34C759;'>FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass, Capacity, FDT Tray, FDT Port, Line, Tube Colour, Core Number, FAT Port</span>.<br>
 4️⃣ OLT CODE agar otomatis, di dalam Description FDT wajib diisi kode OLT.<br>
 5️⃣ Street tidak semua bisa terisi otomatis karena ada beberapa jalan di maps bertanda unnamed road.
 """, unsafe_allow_html=True)
@@ -115,10 +115,6 @@ def run_hpdb(HERE_API_KEY):
             }
         return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-    # 10 warna untuk core
-    CORE_COLORS = ["BLUE", "ORANGE", "GREEN", "BROWN", "SLATE",
-                   "WHITE", "RED", "BLACK", "YELLOW", "VIOLET"]
-
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
@@ -154,12 +150,44 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        for col in ["block", "homenumber", "fdtcode", "oltcode", "Tube Colour", "Core Number"]:
+        # Pastikan kolom ada
+        for col in ["block", "homenumber", "fdtcode", "oltcode",
+                    "Capacity", "FDT Tray (Front)", "FDT Port", "Line",
+                    "Tube Colour", "Core Number", "FAT Port"]:
             if col not in df.columns:
                 df[col] = ""
 
+        # Counter tambahan
+        fdt_port_counter = {}
+        tray_counter = {}
+        core_counter = 1
+        tube_colour = 1
+
+        def get_capacity(fat_id):
+            if fat_id == "FAT_NOT_FOUND":
+                return ""
+            try:
+                num = int(fat_id[-2:])
+            except:
+                return ""
+            if 1 <= num <= 10:
+                return "24C/2T"
+            elif 11 <= num <= 15:
+                return "36C/3T"
+            elif 16 <= num <= 20:
+                return "48C/4T"
+            return ""
+
+        def get_line(fat_id):
+            if fat_id and fat_id != "FAT_NOT_FOUND":
+                return fat_id[0]
+            return ""
+
+        # -------------------------------
+        # Loop isi HP
+        # -------------------------------
         for i, h in enumerate(hp):
-            if i >= len(df):
+            if i >= len(df): 
                 break
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
@@ -179,11 +207,6 @@ def run_hpdb(HERE_API_KEY):
             df.at[i, "postalcode"] = rc["postalcode"]
             df.at[i, "fdtcode"] = fdtcode
             df.at[i, "oltcode"] = oltcode
-
-            # Tube colour dan core number (maks 10)
-            core_idx = i % 10
-            df.at[i, "Tube Colour"] = CORE_COLORS[core_idx]
-            df.at[i, "Core Number"] = core_idx + 1
 
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
@@ -205,11 +228,44 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
+            # ---------------------------
+            # Tambahan logika otomatis
+            # ---------------------------
+            fat_id = df.at[i, "FAT ID"]
+
+            df.at[i, "Capacity"] = get_capacity(fat_id)
+            df.at[i, "Line"] = get_line(fat_id)
+
+            # FDT Port + Tray
+            if fat_id not in fdt_port_counter:
+                fdt_port_counter[fat_id] = 1
+                tray_counter[fat_id] = 1
+            else:
+                fdt_port_counter[fat_id] += 1
+                if fdt_port_counter[fat_id] > 10:
+                    fdt_port_counter[fat_id] = 1
+                    tray_counter[fat_id] += 1
+
+            df.at[i, "FDT Port"] = fdt_port_counter[fat_id]
+            df.at[i, "FDT Tray (Front)"] = tray_counter[fat_id]
+
+            # Tube & Core
+            df.at[i, "Core Number"] = core_counter
+            df.at[i, "Tube Colour"] = tube_colour
+
+            core_counter += 1
+            if core_counter > 10:
+                core_counter = 1
+                tube_colour += 1
+
+            # FAT Port = sama dengan FDT Port
+            df.at[i, "FAT Port"] = df.at[i, "FDT Port"]
+
             progress.progress(int((i + 1) * 100 / total))
 
         progress.empty()
-        st.success("✅ Selesai! Data sudah lengkap & sesuai urutan core (10)")
-        st.dataframe(df.head(15))
+        st.success("✅ Selesai!")
+        st.dataframe(df.head(10))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
