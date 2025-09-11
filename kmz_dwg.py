@@ -121,7 +121,14 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
+def get_longest_line(lines):
+    """Ambil garis terpanjang dari list LineString"""
+    if not lines:
+        return None
+    return max(lines, key=lambda l: l.length)
+
 def angle_from_line(line: LineString, point: Point):
+    """Hitung sudut rotasi dari segmen terdekat suatu garis"""
     nearest_point = line.interpolate(line.project(point))
     coords = list(line.coords)
     min_dist = float("inf")
@@ -138,6 +145,7 @@ def angle_from_line(line: LineString, point: Point):
     angle_rad = math.atan2(y2 - y1, x2 - x1)
     angle_deg = math.degrees(angle_rad)
     return angle_deg
+
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
@@ -196,55 +204,50 @@ def draw_to_template(classified, template_path):
         "JALAN": "JALAN"
     }
 
-    # Siapkan garis "KOTAK" untuk referensi arah
-    kotak_lines = []
-    for obj in classified.get("KOTAK", []):
-        if obj['type'] == 'path':
-            kotak_lines.append(LineString(obj['xy_path']))
+    # Ambil semua garis HOMEPASS untuk referensi rotasi HP
+    homepass_lines = []
+    for obj in classified.get("KOTAK", []):  # KOTAK dipetakan jadi GARIS HOMEPASS
+        if obj['type'] == 'path' and len(obj['xy_path']) >= 2:
+            homepass_lines.append(LineString(obj['xy_path']))
+    longest_homepass = get_longest_line(homepass_lines)
 
     for layer_name, cat_items in classified.items():
-    true_layer = layer_mapping.get(layer_name, layer_name)
-    for obj in cat_items:
-        if obj['type'] != 'point':
-            # ✅ Cegah error "IllegalArgumentException"
-            if len(obj['xy_path']) >= 2:
-                msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-            elif len(obj['xy_path']) == 1:
-                # kalau hanya 1 titik → bikin circle kecil
-                msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
-            continue
-
+        true_layer = layer_mapping.get(layer_name, layer_name)
+        for obj in cat_items:
+            if obj['type'] != 'point':
+                # ✅ Fix polyline error kalau hanya 1 titik
+                if len(obj['xy_path']) >= 2:
+                    msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
+                elif len(obj['xy_path']) == 1:
+                    msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
+                continue
 
             x, y = obj['xy']
 
-            # Default rotation 0
-            rotation = 0
-
-            if layer_name in ["HP_COVER", "HP_UNCOVER"] and kotak_lines:
+            # ============ HP COVER & UNCOVER dengan rotasi ============
+            if layer_name in ["HP_COVER", "HP_UNCOVER"]:
+                rotation = 0.0
                 hp_point = Point(x, y)
-                # Cari garis kotak terdekat
-                nearest_line = min(kotak_lines, key=lambda l: l.distance(hp_point))
-                rotation = angle_from_line(nearest_line, hp_point)
 
-            if layer_name == "HP_COVER":
+                if homepass_lines:
+                    nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
+                    # Kalau terlalu jauh (>20m misalnya), pakai garis terpanjang
+                    if nearest_line.distance(hp_point) > 20 and longest_homepass:
+                        nearest_line = longest_homepass
+                    rotation = angle_from_line(nearest_line, hp_point)
+
+                text_height = 5.0 if layer_name == "HP_COVER" else 4.0
+                text_color = 6 if layer_name == "HP_COVER" else 7
+
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 4.0,
+                    "height": text_height,
                     "layer": "FEATURE_LABEL",
-                    "color": 6,
+                    "color": text_color,
                     "insert": (x - 2.2, y - 0.9),
                     "rotation": rotation
                 })
                 continue
-
-            elif layer_name == "HP_UNCOVER":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 4.0,
-                    "layer": "FEATURE_LABEL",
-                    "color": 7,
-                    "insert": (x - 2.2, y - 0.9),
-                    "rotation": rotation
-                })
-                continue
+            # ==========================================================
 
             block_name = None
             matchblock = None
@@ -345,6 +348,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
