@@ -4,9 +4,9 @@ import zipfile
 from lxml import etree   # pakai lxml bukan xml.etree
 from io import BytesIO
 import requests
-from collections import defaultdict
 
 def run_hpdb(HERE_API_KEY):
+
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot⚡)")
     st.markdown("""
 <h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
@@ -115,7 +115,7 @@ def run_hpdb(HERE_API_KEY):
             }
         return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-    # Warna urutan hanya 10 core
+    # 10 warna untuk core
     CORE_COLORS = ["BLUE", "ORANGE", "GREEN", "BROWN", "SLATE",
                    "WHITE", "RED", "BLACK", "YELLOW", "VIOLET"]
 
@@ -152,42 +152,64 @@ def run_hpdb(HERE_API_KEY):
                         break
 
         progress = st.progress(0)
+        total = len(hp)
 
-        # --- Group HP by FAT ID ---
-        grouped = defaultdict(list)
-        for h in hp:
+        for col in ["block", "homenumber", "fdtcode", "oltcode", "Tube Colour", "Core Number"]:
+            if col not in df.columns:
+                df[col] = ""
+
+        for i, h in enumerate(hp):
+            if i >= len(df):
+                break
             fc = extract_fatcode(h["path"])
+            df.at[i, "fatcode"] = fc
+
+            name_parts = h["name"].split(".")
+            if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
+                df.at[i, "block"] = name_parts[0].strip().upper()
+                df.at[i, "homenumber"] = name_parts[1].strip()
+            else:
+                df.at[i, "block"] = ""
+                df.at[i, "homenumber"] = h["name"]
+
+            df.at[i, "Latitude_homepass"] = h["lat"]
+            df.at[i, "Longitude_homepass"] = h["lon"]
+            df.at[i, "district"] = rc["district"]
+            df.at[i, "subdistrict"] = rc["subdistrict"]
+            df.at[i, "postalcode"] = rc["postalcode"]
+            df.at[i, "fdtcode"] = fdtcode
+            df.at[i, "oltcode"] = oltcode
+
+            # Tube colour dan core number (maks 10)
+            core_idx = i % 10
+            df.at[i, "Tube Colour"] = CORE_COLORS[core_idx]
+            df.at[i, "Core Number"] = core_idx + 1
+
+            hh = reverse_here(h["lat"], h["lon"])
+            df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
+
             mf = next((x for x in fat if fc in x["name"]), None)
-            fat_id = mf["name"] if mf else "FAT_NOT_FOUND"
-            grouped[fat_id].append(h)
+            if mf:
+                df.at[i, "FAT ID"] = mf["name"]
+                df.at[i, "Pole Latitude"] = mf["lat"]
+                df.at[i, "Pole Longitude"] = mf["lon"]
+                pol = next(
+                    (p["name"] for p in all_poles if abs(p["lat"] - mf["lat"]) < 1e-4 and abs(p["lon"] - mf["lon"]) < 1e-4),
+                    "POLE_NOT_FOUND"
+                )
+                df.at[i, "Pole ID"] = pol
+                fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
+                df.at[i, "FAT Address"] = fataddr
+            else:
+                df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
+                df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
+                df.at[i, "FAT Address"] = ""
 
-        new_rows = []
-        for fat_idx, (fat_id, hps) in enumerate(grouped.items()):
-            line = "LINE A" if ".A" in fat_id[-3:].upper() else ("LINE B" if ".B" in fat_id[-3:].upper() else "")
-            capacity = len(hps)
-            for port_idx, h in enumerate(hps[:10]):  # hanya 10 port
-                row = {}
-                row["FAT ID"] = fat_id
-                row["FAT Port"] = port_idx + 1
-                row["Line"] = line
-                row["Capacity"] = f"{capacity}C"
-                row["Tube Colour"] = CORE_COLORS[port_idx]
-                row["Core Number"] = port_idx + 1
-                row["Latitude_homepass"] = h["lat"]
-                row["Longitude_homepass"] = h["lon"]
-                row["fdtcode"] = fdtcode
-                row["oltcode"] = oltcode
-                row["fatcode"] = extract_fatcode(h["path"])
-                hh = reverse_here(h["lat"], h["lon"])
-                row["street"] = hh["street"].replace("JALAN ", "").strip()
-                new_rows.append(row)
-
-            progress.progress(int((fat_idx + 1) * 100 / len(grouped)))
+            progress.progress(int((i + 1) * 100 / total))
 
         progress.empty()
-        out_df = pd.DataFrame(new_rows)
-        st.success("✅ Selesai! Data sudah sesuai pola 10 core per FAT")
-        st.dataframe(out_df.head(20))
+        st.success("✅ Selesai! Data sudah lengkap & sesuai urutan core (10)")
+        st.dataframe(df.head(15))
         buf = BytesIO()
-        out_df.to_excel(buf, index=False)
+        df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
