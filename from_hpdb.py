@@ -27,7 +27,7 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # ------------------------------
-    # Extract placemarks pakai lxml
+    # helper
     # ------------------------------
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
@@ -98,6 +98,7 @@ def run_hpdb(HERE_API_KEY):
 
     def extract_fatcode(path):
         for part in path.split("/"):
+            part = part.strip().upper()
             if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
                 return part
         return "UNKNOWN"
@@ -115,17 +116,33 @@ def run_hpdb(HERE_API_KEY):
             }
         return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
+    def find_fdt_port_col(df):
+        # cari kolom yang mengandung kata FDT dan PORT (case-insensitive)
+        for c in df.columns:
+            u = c.upper().replace(" ", "")
+            if "FDT" in u and "PORT" in u:
+                return c
+        # fallback nama umum
+        for alt in ["FDT Port", "FDT_PORT", "FDTPORT", "FDT\nPort", "FDT Port "]:
+            if alt in df.columns:
+                return alt
+        return None
+
+    # ------------------------------
+    # main
+    # ------------------------------
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
         df = pd.read_excel(template_file)
-        fat = placemarks["FAT"]
-        hp = placemarks["HP COVER"]
-        fdt = placemarks["FDT"]
+
+        fat = placemarks.get("FAT", [])
+        hp = placemarks.get("HP COVER", [])
+        fdt = placemarks.get("FDT", [])
         all_poles = (
-            placemarks["NEW POLE 7-3"]
-            + placemarks["EXISTING POLE EMR 7-3"]
-            + placemarks["EXISTING POLE EMR 7-4"]
+            placemarks.get("NEW POLE 7-3", []) +
+            placemarks.get("EXISTING POLE EMR 7-3", []) +
+            placemarks.get("EXISTING POLE EMR 7-4", [])
         )
 
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
@@ -143,14 +160,14 @@ def run_hpdb(HERE_API_KEY):
                     name_el = pm.find("kml:name", ns)
                     desc_el = pm.find("kml:description", ns)
                     if name_el is not None and name_el.text.strip().upper() == fdtcode:
-                        if desc_el is not None:
+                        if desc_el is not None and desc_el.text:
                             oltcode = desc_el.text.strip().upper()
                         break
 
         progress = st.progress(0)
-        total = len(hp)
+        total = max(1, len(hp))
 
-        # pastikan kolom wajib ada
+        # pastikan kolom wajib ada (tetapi jangan overwrite kolom template FDT/Tube/Core)
         must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
@@ -159,9 +176,9 @@ def run_hpdb(HERE_API_KEY):
             if col not in df.columns:
                 df[col] = ""
 
-        # isi data per HP
+        # isi data per HP (tetap isi fatcode, koordinat, alamat, FAT ID, Pole ID, dll.)
         for i, h in enumerate(hp):
-            if i >= len(df): 
+            if i >= len(df):
                 break
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
@@ -201,38 +218,79 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
-            progress.progress(int((i + 1) * 100 / max(1, total)))
+            progress.progress(int((i + 1) * 100 / total))
 
-        # === HITUNG LINE & CAPACITY BERDASARKAN GRUP FATCODE ===
-        fatcode_groups = df.groupby("fatcode").indices
-        for fc, idx_list in fatcode_groups.items():
-            if not isinstance(fc, str) or len(fc) < 2:
-                continue
-            if fc[0] not in "ABCD":
-                continue
-            try:
-                num = int(fc[1:])
-            except:
-                continue
+        # ---------------------------
+        # SEKARANG: hitung Line & Capacity per LETTER GROUP (A/B/C/D)
+        # - Capacity ditentukan dari nilai terbesar suffix dalam grup
+        # - Hanya tulis ke 1 baris per grup:
+        #     pilih baris pertama di grup yang punya FDT Port terisi,
+        #     kalau tidak ada, pilih baris pertama munculnya grup
+        # ---------------------------
+        # kosongkan dulu kolom Line & Capacity agar pasti hanya 1 cell per group terisi
+        df["Line"] = ""
+        df["Capacity"] = ""
 
-            line_val = fc[0]
-            if 1 <= num <= 10:
+        fdt_port_col = find_fdt_port_col(df)  # bisa None kalau tidak ada di template
+
+        # kumpulkan per letter
+        letter_groups = {}
+        for idx, fc in df["fatcode"].items():
+            if not isinstance(fc, str):
+                continue
+            fc = fc.strip().upper()
+            if len(fc) >= 2 and fc[0] in "ABCD" and fc[1:].isdigit():
+                letter = fc[0]
+                try:
+                    num = int(fc[1:])
+                except:
+                    continue
+                letter_groups.setdefault(letter, []).append((idx, num))
+
+        # untuk tiap letter, tentukan max num -> capacity, dan baris target -> isi Line & Capacity
+        for letter, pairs in letter_groups.items():
+            if not pairs:
+                continue
+            # urutkan berdasarkan index (posisi di dataframe) agar deterministik
+            pairs_sorted = sorted(pairs, key=lambda x: x[0])
+            idxs = [p[0] for p in pairs_sorted]
+            nums = [p[1] for p in pairs_sorted]
+            max_num = max(nums)
+
+            # capacity rules berdasarkan max_num
+            if 1 <= max_num <= 10:
                 cap_val = "24C/2T"
-            elif 11 <= num <= 15:
+            elif 11 <= max_num <= 15:
                 cap_val = "36C/3T"
-            elif 16 <= num <= 20:
+            elif 16 <= max_num <= 20:
                 cap_val = "48C/4T"
             else:
                 cap_val = ""
 
-            for i in idx_list:
-                df.at[i, "Line"] = line_val
-                df.at[i, "Capacity"] = cap_val
+            # pilih baris target:
+            target_idx = None
+            if fdt_port_col and fdt_port_col in df.columns:
+                # cari baris di idxs yang memiliki nilai non-empty pada kolom FDT Port
+                for ix in idxs:
+                    try:
+                        val = df.at[ix, fdt_port_col]
+                    except KeyError:
+                        val = ""
+                    if pd.notna(val) and str(val).strip() != "":
+                        target_idx = ix
+                        break
+            # fallback: pilih baris pertama munculnya group
+            if target_idx is None:
+                target_idx = idxs[0]
+
+            # isi hanya pada target_idx
+            df.at[target_idx, "Line"] = letter
+            df.at[target_idx, "Capacity"] = cap_val
+            # sisanya tetap kosong (biar mirip merged cell / satu entry per group)
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(10))
+        st.dataframe(df.head(30))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
