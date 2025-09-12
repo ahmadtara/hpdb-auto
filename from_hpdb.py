@@ -4,6 +4,8 @@ import zipfile
 from lxml import etree   # pakai lxml bukan xml.etree
 from io import BytesIO
 import requests
+import re
+from collections import defaultdict
 
 def run_hpdb(HERE_API_KEY):
 
@@ -29,54 +31,54 @@ def run_hpdb(HERE_API_KEY):
     # ------------------------------
     # Extract placemarks pakai lxml
     # ------------------------------
+    def first_lonlat_from_pm(pm, ns):
+        for xpath in [
+            "./kml:Point/kml:coordinates",
+            "./kml:LineString/kml:coordinates",
+            "./kml:Polygon//kml:coordinates",
+            ".//kml:coordinates"
+        ]:
+            el = pm.find(xpath, ns)
+            if el is None or el.text is None:
+                continue
+            txt = " ".join(el.text.split())
+            tokens = [t for t in txt.split(" ") if "," in t]
+            if not tokens:
+                continue
+            parts = tokens[0].split(",")
+            if len(parts) >= 2:
+                try:
+                    lon = float(parts[0])
+                    lat = float(parts[1])
+                    return lon, lat
+                except ValueError:
+                    continue
+        return None
+
+    def recurse_folder(folder, ns, path=""):
+        items = []
+        name_el = folder.find("kml:name", ns)
+        folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
+        new_path = f"{path}/{folder_name}" if path else folder_name
+        for sub in folder.findall("kml:Folder", ns):
+            items += recurse_folder(sub, ns, new_path)
+        for pm in folder.findall("kml:Placemark", ns):
+            nm = pm.find("kml:name", ns)
+            if nm is None:
+                continue
+            first = first_lonlat_from_pm(pm, ns)
+            if first is None:
+                continue
+            lon, lat = first
+            items.append({
+                "name": nm.text.strip(),
+                "lat": lat,
+                "lon": lon,
+                "path": new_path
+            })
+        return items
+
     def extract_placemarks(kmz_bytes):
-        def first_lonlat_from_pm(pm, ns):
-            for xpath in [
-                "./kml:Point/kml:coordinates",
-                "./kml:LineString/kml:coordinates",
-                "./kml:Polygon//kml:coordinates",
-                ".//kml:coordinates"
-            ]:
-                el = pm.find(xpath, ns)
-                if el is None or el.text is None:
-                    continue
-                txt = " ".join(el.text.split())
-                tokens = [t for t in txt.split(" ") if "," in t]
-                if not tokens:
-                    continue
-                parts = tokens[0].split(",")
-                if len(parts) >= 2:
-                    try:
-                        lon = float(parts[0])
-                        lat = float(parts[1])
-                        return lon, lat
-                    except ValueError:
-                        continue
-            return None
-
-        def recurse_folder(folder, ns, path=""):
-            items = []
-            name_el = folder.find("kml:name", ns)
-            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
-            new_path = f"{path}/{folder_name}" if path else folder_name
-            for sub in folder.findall("kml:Folder", ns):
-                items += recurse_folder(sub, ns, new_path)
-            for pm in folder.findall("kml:Placemark", ns):
-                nm = pm.find("kml:name", ns)
-                if nm is None:
-                    continue
-                first = first_lonlat_from_pm(pm, ns)
-                if first is None:
-                    continue
-                lon, lat = first
-                items.append({
-                    "name": nm.text.strip(),
-                    "lat": lat,
-                    "lon": lon,
-                    "path": new_path
-                })
-            return items
-
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
             f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
             parser = etree.XMLParser(recover=True)
@@ -96,15 +98,31 @@ def run_hpdb(HERE_API_KEY):
                         break
             return data
 
+    def normalize_code(token):
+        # token like A1, a01, A001 -> A01 (two digit)
+        m = re.match(r'([ABCD])0*([0-9]{1,3})$', token.upper().strip())
+        if not m:
+            return None
+        letter = m.group(1)
+        num = int(m.group(2))
+        return f"{letter}{num:02d}"
+
+    def extract_fatcode_from_text(txt):
+        if txt is None:
+            return None
+        txt = txt.upper()
+        m = re.search(r'([ABCD])0*([0-9]{1,3})', txt)
+        if m:
+            return f"{m.group(1)}{int(m.group(2)):02d}"
+        return None
+
     def extract_fatcode(path):
-        # cari token seperti A01, B12, C03, D20 pada path folder
+        # cek setiap segmen path dulu, lalu fallback ke full path
         for part in path.split("/"):
-            p = part.strip().upper()
-            if len(p) >= 3 and p[0] in "ABCD" and p[1:].isdigit():
-                # ambil hanya 3 karakter A01 style (tapi jika ada A001, ambil A01)
-                code = p[:3]
-                return code
-        return "UNKNOWN"
+            c = extract_fatcode_from_text(part)
+            if c:
+                return c
+        return extract_fatcode_from_text(path) or "UNKNOWN"
 
     def reverse_here(lat, lon):
         url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
@@ -171,17 +189,43 @@ def run_hpdb(HERE_API_KEY):
                         "WHITE", "RED", "BLACK", "YELLOW", "VIOLET",
                         "PINK", "AQUA"]
 
-        progress = st.progress(0)
+        # ----------------------------
+        # Build mapping FAT -> daftar kode port (mis. A01, A02, ...)
+        # ----------------------------
+        code_to_fat_name = {}
+        fat_name_to_codes = defaultdict(set)
+
+        for f_item in fat:
+            # cek name dan path teks untuk kode
+            s = (f_item.get("name","") + " " + f_item.get("path","")).upper()
+            codes_found = re.findall(r'([ABCD]\d{1,3})', s)
+            for raw in codes_found:
+                norm = normalize_code(raw)
+                if norm:
+                    code_to_fat_name[norm] = f_item["name"]
+                    fat_name_to_codes[f_item["name"]].add(norm)
+
+        # juga lakukan scan pada folder path kemungkinan kode disana
+        # (kadang code ada di path, kadang di name)
+        # Jika tidak ada mapping sama sekali, kita masih akan fallback later.
+
+        # ----------------------------
+        # PASS 1: isi kolom dasar (block, homo, lat/lon, district, FDT/OLT, FAT ID basic)
+        # dan simpan metadata per homepass (fc, tentative fat_name)
+        # ----------------------------
+        hp_meta = []  # list of dicts: {idx, fc, fat_name}
         total = len(hp)
+        progress = st.progress(0)
 
         for i, h in enumerate(hp):
             if i >= len(df):
                 break
 
+            # fatcode dari path
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
-            # ----- EXTRACT/block & homenumber seperti kode lama -----
+            # block & homenumber
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -201,8 +245,18 @@ def run_hpdb(HERE_API_KEY):
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
-            # ----- Cari FAT terdekat berdasarkan fatcode (nama FAT mengandung kode) -----
-            mf = next((x for x in fat if fc in x["name"]), None)
+            # Tentukan FAT (mf) utk kolom FAT ID, Pole, dll (cara fallback sebelumnya)
+            mf = None
+            # coba mapping kode -> fat name
+            if fc and fc != "UNKNOWN":
+                mapped = code_to_fat_name.get(fc)
+                if mapped:
+                    # cari object fat sesuai nama mapped
+                    mf = next((x for x in fat if x["name"] == mapped), None)
+            if mf is None:
+                # fallback: cari FAT placemark yang mengandung kode
+                mf = next((x for x in fat if fc in x.get("name","").upper()), None)
+
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
                 df.at[i, "Pole Latitude"] = mf["lat"]
@@ -219,79 +273,93 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
-            # ----------------------------
-            # LOGIKA BARU: FAT Port, FDT Tray, FDT Port, Line, Capacity, Tube Colour, Core Number
-            # ----------------------------
-            # Ambil nomor port dari fatcode jika bisa (A01 -> 1, B12 -> 12)
-            fat_port_num = None
-            if fc and len(fc) >= 2 and fc[1:].isdigit():
-                try:
-                    fat_port_num = int(fc[1:])
-                except:
-                    fat_port_num = None
-
-            # FAT Port: gunakan angka dari fatcode jika valid, else fallback ke urutan i+1
-            if fat_port_num is not None:
-                df.at[i, "FAT Port"] = fat_port_num
-            else:
-                df.at[i, "FAT Port"] = (i % 20) + 1  # fallback 1..20
-
-            # FDT Tray (Front) dan FDT Port = siklus 1..10 berulang
-            # Prefer menggunakan FAT Port jika ada: map fat_port_num ke 1..10 siklus
-            if fat_port_num is not None:
-                tray_port_val = ((fat_port_num - 1) % 10) + 1
-            else:
-                tray_port_val = (i % 10) + 1
-
-            df.at[i, "FDT Tray (Front)"] = tray_port_val
-            df.at[i, "FDT Port"] = tray_port_val
-
-            # Line berdasarkan huruf depan fatcode (A/B/C/D)
-            if fc and fc[0] in ["A", "B", "C", "D"]:
-                df.at[i, "Line"] = f"Line {fc[0]}"
-            else:
-                df.at[i, "Line"] = "UNKNOWN"
-
-            # Capacity berdasarkan range nomor di fatcode
-            cap = "UNKNOWN"
-            if fat_port_num is not None:
-                if 1 <= fat_port_num <= 10:
-                    cap = "24C/2T"
-                elif 11 <= fat_port_num <= 15:
-                    cap = "36C/3T"
-                elif 16 <= fat_port_num <= 20:
-                    cap = "48C/4T"
-            df.at[i, "Capacity"] = cap
-
-            # Tube Colour: siklus berdasarkan FDT Tray (Front)
-            # (Tray 1 -> first colour, Tray 2 -> second, dll)
-            tray_idx = int(df.at[i, "FDT Tray (Front)"]) - 1
-            df.at[i, "Tube Colour"] = tube_colours[tray_idx % len(tube_colours)]
-
-            # Core Number: berpasangan berdasarkan FAT Port nomor
-            # Aturan: port 1 -> cores "1,2"; port 2 -> "3,4"; port 3 -> "5,6" dst.
-            # Kita buat pasangan berdasarkan urutan natural FAT Port:
-            if fat_port_num is not None:
-                pair_start = (fat_port_num - 1) * 2 - ((fat_port_num - 1) // 10) * 20
-                # penyesuaian jika fat_port_num 1 -> 1,2; 2 -> 3,4; dst.
-                # tetapi untuk port > 10, akan menghasilkan lebih besar dari 20; 
-                # jika ingin siklus 1..20, gunakan mapping alternatif:
-                # simpler: buat pasangan linear: port_n -> ((n-1)*2+1, (n-1)*2+2)
-                start = (fat_port_num - 1) * 2 + 1
-                core_pair = f"{start},{start+1}"
-            else:
-                # fallback: pairing berdasarkan tray_port_val
-                start = (tray_port_val - 1) * 2 + 1
-                core_pair = f"{start},{start+1}"
-
-            df.at[i, "Core Number"] = core_pair
-
-            # update progress
+            hp_meta.append({"idx": i, "fc": fc, "fat_name": df.at[i, "FAT ID"]})
             progress.progress(int((i + 1) * 100 / max(1, total)))
 
+        # ----------------------------
+        # PASS 2: proses blok per FAT ID (kontigu) dan isi FAT Port dkk berdasarkan jumlah port FAT itu
+        # ----------------------------
+        # fungsi helper untuk capacity
+        def capacity_from_num(n):
+            if 1 <= n <= 10:
+                return "24C/2T"
+            elif 11 <= n <= 15:
+                return "36C/3T"
+            elif 16 <= n <= 20:
+                return "48C/4T"
+            return "UNKNOWN"
+
+        i = 0
+        while i < len(hp_meta):
+            curr_fat = hp_meta[i]["fat_name"]
+            block_indices = []
+            j = i
+            # kumpulkan blok kontigu dengan FAT ID yang sama
+            while j < len(hp_meta) and hp_meta[j]["fat_name"] == curr_fat:
+                block_indices.append(hp_meta[j]["idx"])
+                j += 1
+
+            # jika FAT_NOT_FOUND kita lewati pengisian FAT Port (atau bisa di-handle fallback)
+            if curr_fat == "FAT_NOT_FOUND":
+                # opsi: jangan isi FAT Port (biarkan kosong)
+                # jika mau diisi fallback, ubah logic di sini
+                i = j
+                continue
+
+            # ambil daftar kode port untuk FAT ini (urutkan asc)
+            port_codes = sorted(list(fat_name_to_codes.get(curr_fat, [])),
+                                key=lambda c: int(c[1:]) if len(c) > 1 else 0)
+            number_of_ports = len(port_codes)
+
+            # Jika tidak ada data port untuk FAT ini, fallback ke coba-cari kode dari hp fc dalam blok
+            if number_of_ports == 0:
+                # ambil semua fc unik dari block
+                block_fcs = [hp_meta[k]["fc"] for k in range(i, j)]
+                block_codes = [c for c in (set(block_fcs) - {"UNKNOWN"})]
+                block_codes = sorted(block_codes, key=lambda c: int(c[1:]) if len(c) > 1 else 0)
+                port_codes = block_codes
+                number_of_ports = len(port_codes)
+
+            # Isi FAT Port hanya sampai jumlah port (batas)
+            for k, row_idx in enumerate(block_indices):
+                if k < number_of_ports:
+                    assigned_code = port_codes[k]  # ex 'A01'
+                    try:
+                        assigned_port_num = int(assigned_code[1:])
+                    except:
+                        assigned_port_num = k + 1
+                    # isi FAT Port numeric
+                    df.at[row_idx, "FAT Port"] = assigned_port_num
+                    # FDT Tray & Port = siklus 1..10 berdasarkan assigned_port_num
+                    tray_port_val = ((assigned_port_num - 1) % 10) + 1
+                    df.at[row_idx, "FDT Tray (Front)"] = tray_port_val
+                    df.at[row_idx, "FDT Port"] = tray_port_val
+                    # Line dari huruf assigned_code[0]
+                    letter = assigned_code[0] if len(assigned_code) > 0 else ""
+                    df.at[row_idx, "Line"] = f"Line {letter}" if letter else "UNKNOWN"
+                    # Capacity dari nomor
+                    df.at[row_idx, "Capacity"] = capacity_from_num(assigned_port_num)
+                    # Tube Colour dari tray index
+                    tray_idx = int(tray_port_val) - 1
+                    df.at[row_idx, "Tube Colour"] = tube_colours[tray_idx % len(tube_colours)]
+                    # Core Number: pasangan berdasarkan urutan port dalam FAT (1->1,2 ; 2->3,4 ; dst)
+                    core_start = (k) * 2 + 1
+                    df.at[row_idx, "Core Number"] = f"{core_start},{core_start+1}"
+                else:
+                    # melebihi jumlah port FAT -> biarkan kosong (batas isi sesuai permintaan)
+                    df.at[row_idx, "FAT Port"] = ""
+                    df.at[row_idx, "FDT Tray (Front)"] = ""
+                    df.at[row_idx, "FDT Port"] = ""
+                    df.at[row_idx, "Line"] = ""
+                    df.at[row_idx, "Capacity"] = ""
+                    df.at[row_idx, "Tube Colour"] = ""
+                    df.at[row_idx, "Core Number"] = ""
+            # lanjut ke blok berikutnya
+            i = j
+
         progress.empty()
-        st.success("✅ Selesai!")
-        st.dataframe(df.head(20))
+        st.success("✅ Selesai! (logika blok FAT dan pengisian port sudah diperbarui)")
+        st.dataframe(df.head(50))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
@@ -299,6 +367,5 @@ def run_hpdb(HERE_API_KEY):
 
 # Jika mau jalanin langsung (contoh):
 if __name__ == "__main__":
-    # Masukkan API KEY HERE-mu di sini jika mau test lokal
     HERE_API_KEY = st.secrets.get("HERE_API_KEY", "") if "st" in globals() else ""
     run_hpdb(HERE_API_KEY)
