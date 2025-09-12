@@ -229,7 +229,7 @@ def draw_to_template(classified, template_path):
                     rotation = longest_segment_angle(list(nearest_line.coords))
 
                 msp.add_text(obj["name"], dxfattribs={
-                    "height": 4.5,
+                    "height": 6,
                     "layer": "FEATURE_LABEL",
                     "color": 6,
                     "insert": (x, y),   # posisi asli tetap
@@ -353,6 +353,7 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
