@@ -29,7 +29,7 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # ------------------------------
-    # Extract placemarks pakai lxml
+    # Helper untuk ekstraksi koordinat dan rekursi folder
     # ------------------------------
     def first_lonlat_from_pm(pm, ns):
         for xpath in [
@@ -98,6 +98,9 @@ def run_hpdb(HERE_API_KEY):
                         break
             return data
 
+    # ------------------------------
+    # Normalisasi dan ekstrak kode FAT
+    # ------------------------------
     def normalize_code(token):
         # token like A1, a01, A001 -> A01 (two digit)
         m = re.match(r'([ABCD])0*([0-9]{1,3})$', token.upper().strip())
@@ -154,7 +157,7 @@ def run_hpdb(HERE_API_KEY):
         fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
         oltcode = "UNKNOWN"
 
-        # Cari OLT dari description FDT
+        # Cari OLT dari description FDT (sama seperti sebelumnya)
         if fdt:
             with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
                 f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
@@ -205,13 +208,8 @@ def run_hpdb(HERE_API_KEY):
                     code_to_fat_name[norm] = f_item["name"]
                     fat_name_to_codes[f_item["name"]].add(norm)
 
-        # juga lakukan scan pada folder path kemungkinan kode disana
-        # (kadang code ada di path, kadang di name)
-        # Jika tidak ada mapping sama sekali, kita masih akan fallback later.
-
         # ----------------------------
-        # PASS 1: isi kolom dasar (block, homo, lat/lon, district, FDT/OLT, FAT ID basic)
-        # dan simpan metadata per homepass (fc, tentative fat_name)
+        # PASS 1: isi kolom dasar & kumpulkan metadata per homepass
         # ----------------------------
         hp_meta = []  # list of dicts: {idx, fc, fat_name}
         total = len(hp)
@@ -247,14 +245,11 @@ def run_hpdb(HERE_API_KEY):
 
             # Tentukan FAT (mf) utk kolom FAT ID, Pole, dll (cara fallback sebelumnya)
             mf = None
-            # coba mapping kode -> fat name
             if fc and fc != "UNKNOWN":
                 mapped = code_to_fat_name.get(fc)
                 if mapped:
-                    # cari object fat sesuai nama mapped
                     mf = next((x for x in fat if x["name"] == mapped), None)
             if mf is None:
-                # fallback: cari FAT placemark yang mengandung kode
                 mf = next((x for x in fat if fc in x.get("name","").upper()), None)
 
             if mf:
@@ -279,7 +274,6 @@ def run_hpdb(HERE_API_KEY):
         # ----------------------------
         # PASS 2: proses blok per FAT ID (kontigu) dan isi FAT Port dkk berdasarkan jumlah port FAT itu
         # ----------------------------
-        # fungsi helper untuk capacity
         def capacity_from_num(n):
             if 1 <= n <= 10:
                 return "24C/2T"
@@ -299,10 +293,8 @@ def run_hpdb(HERE_API_KEY):
                 block_indices.append(hp_meta[j]["idx"])
                 j += 1
 
-            # jika FAT_NOT_FOUND kita lewati pengisian FAT Port (atau bisa di-handle fallback)
             if curr_fat == "FAT_NOT_FOUND":
-                # opsi: jangan isi FAT Port (biarkan kosong)
-                # jika mau diisi fallback, ubah logic di sini
+                # lewati pengisian FAT Port (biarkan kosong)
                 i = j
                 continue
 
@@ -311,16 +303,18 @@ def run_hpdb(HERE_API_KEY):
                                 key=lambda c: int(c[1:]) if len(c) > 1 else 0)
             number_of_ports = len(port_codes)
 
-            # Jika tidak ada data port untuk FAT ini, fallback ke coba-cari kode dari hp fc dalam blok
+            # fallback: jika tidak ada mapping, gunakan fc unik di blok (urutan)
             if number_of_ports == 0:
-                # ambil semua fc unik dari block
                 block_fcs = [hp_meta[k]["fc"] for k in range(i, j)]
-                block_codes = [c for c in (set(block_fcs) - {"UNKNOWN"})]
+                block_codes = [c for c in (list(dict.fromkeys(block_fcs))) if c != "UNKNOWN"]
                 block_codes = sorted(block_codes, key=lambda c: int(c[1:]) if len(c) > 1 else 0)
                 port_codes = block_codes
                 number_of_ports = len(port_codes)
 
-            # Isi FAT Port hanya sampai jumlah port (batas)
+            # Isi FAT Port hanya sampai jumlah port (batas). Untuk setiap port ke-k dalam FAT:
+            # - tray_val = floor(k/10)+1  (tray tetap 1 sampai 10 cores, lalu 2 dst)
+            # - core_seq = (k % 10) + 1  (1..10)
+            # - core pair = (core_seq-1)*2+1 , (core_seq-1)*2+2  -> "1,2" ... "19,20"
             for k, row_idx in enumerate(block_indices):
                 if k < number_of_ports:
                     assigned_code = port_codes[k]  # ex 'A01'
@@ -330,20 +324,27 @@ def run_hpdb(HERE_API_KEY):
                         assigned_port_num = k + 1
                     # isi FAT Port numeric
                     df.at[row_idx, "FAT Port"] = assigned_port_num
-                    # FDT Tray & Port = siklus 1..10 berdasarkan assigned_port_num
-                    tray_port_val = ((assigned_port_num - 1) % 10) + 1
-                    df.at[row_idx, "FDT Tray (Front)"] = tray_port_val
-                    df.at[row_idx, "FDT Port"] = tray_port_val
-                    # Line dari huruf assigned_code[0]
+
+                    # --- NEW LOGIC sesuai permintaan: tray/tube berubah setiap 10 core ---
+                    tray_val = (k // 10) + 1  # tray 1 untuk k=0..9 ; tray 2 untuk k=10..19
+                    core_seq = (k % 10) + 1   # 1..10 then reset when tray increments
+
+                    # FDT Tray (Front) dan FDT Port = tray_val (tray block of 10)
+                    df.at[row_idx, "FDT Tray (Front)"] = tray_val
+                    df.at[row_idx, "FDT Port"] = tray_val
+
+                    # Line berdasarkan huruf assigned_code[0]
                     letter = assigned_code[0] if len(assigned_code) > 0 else ""
                     df.at[row_idx, "Line"] = f"Line {letter}" if letter else "UNKNOWN"
-                    # Capacity dari nomor
+
+                    # Capacity berdasarkan nomor port
                     df.at[row_idx, "Capacity"] = capacity_from_num(assigned_port_num)
-                    # Tube Colour dari tray index
-                    tray_idx = int(tray_port_val) - 1
-                    df.at[row_idx, "Tube Colour"] = tube_colours[tray_idx % len(tube_colours)]
-                    # Core Number: pasangan berdasarkan urutan port dalam FAT (1->1,2 ; 2->3,4 ; dst)
-                    core_start = (k) * 2 + 1
+
+                    # Tube Colour: berdasarkan tray_val -> warna siklus per tray
+                    df.at[row_idx, "Tube Colour"] = tube_colours[(tray_val - 1) % len(tube_colours)]
+
+                    # Core Number: pasangan berdasarkan core_seq (1..10)
+                    core_start = (core_seq - 1) * 2 + 1
                     df.at[row_idx, "Core Number"] = f"{core_start},{core_start+1}"
                 else:
                     # melebihi jumlah port FAT -> biarkan kosong (batas isi sesuai permintaan)
@@ -358,7 +359,7 @@ def run_hpdb(HERE_API_KEY):
             i = j
 
         progress.empty()
-        st.success("✅ Selesai! (logika blok FAT dan pengisian port sudah diperbarui)")
+        st.success("✅ Selesai! (logika tray/tube/core: 10-core per tray, reset core tiap tray telah diterapkan)")
         st.dataframe(df.head(50))
         buf = BytesIO()
         df.to_excel(buf, index=False)
