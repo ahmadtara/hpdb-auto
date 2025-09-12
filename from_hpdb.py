@@ -13,7 +13,7 @@ def run_hpdb(HERE_API_KEY):
 ✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
 1️⃣ <span style='color:#FF6B6B;'>TEMPLATE XLSX</span> harus disesuaikan jumlahnya dengan total homepass dari KMZ.<br>
 2️⃣ Block agar terpisah otomatis harus pakai titik, contoh <code>B.1</code> dan <code>A.1</code>.<br>
-3️⃣ Fitur otomatis: <span style='color:#34C759;'>FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass, Capacity, FDT Tray, FDT Port, Line, Tube Colour, Core Number, FAT Port</span>.<br>
+3️⃣ Fitur otomatis: <span style='color:#34C759;'>FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass</span>.<br>
 4️⃣ OLT CODE agar otomatis, di dalam Description FDT wajib diisi kode OLT.<br>
 5️⃣ Street tidak semua bisa terisi otomatis karena ada beberapa jalan di maps bertanda unnamed road.
 """, unsafe_allow_html=True)
@@ -97,9 +97,13 @@ def run_hpdb(HERE_API_KEY):
             return data
 
     def extract_fatcode(path):
+        # cari token seperti A01, B12, C03, D20 pada path folder
         for part in path.split("/"):
-            if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
-                return part
+            p = part.strip().upper()
+            if len(p) >= 3 and p[0] in "ABCD" and p[1:].isdigit():
+                # ambil hanya 3 karakter A01 style (tapi jika ada A001, ambil A01)
+                code = p[:3]
+                return code
         return "UNKNOWN"
 
     def reverse_here(lat, lon):
@@ -147,51 +151,37 @@ def run_hpdb(HERE_API_KEY):
                             oltcode = desc_el.text.strip().upper()
                         break
 
-        progress = st.progress(0)
-        total = len(hp)
-
-        # Pastikan kolom ada
-        for col in ["block", "homenumber", "fdtcode", "oltcode",
-                    "Capacity", "FDT Tray (Front)", "FDT Port", "Line",
-                    "Tube Colour", "Core Number", "FAT Port"]:
+        # ----------------------------
+        # Tambahkan kolom baru bila belum ada
+        # ----------------------------
+        new_cols = [
+            "block", "homenumber", "fdtcode", "oltcode",
+            "FAT Port", "FDT Tray (Front)", "FDT Port",
+            "Line", "Capacity", "Tube Colour", "Core Number",
+            "Latitude_homepass", "Longitude_homepass",
+            "district", "subdistrict", "postalcode",
+            "FAT ID", "Pole Latitude", "Pole Longitude", "Pole ID", "FAT Address"
+        ]
+        for col in new_cols:
             if col not in df.columns:
                 df[col] = ""
 
-        # Counter tambahan
-        fdt_port_counter = {}
-        tray_counter = {}
-        core_counter = 1
-        tube_colour = 1
+        # definisi warna tube (siklus)
+        tube_colours = ["BLUE", "ORANGE", "GREEN", "BROWN", "SLATE",
+                        "WHITE", "RED", "BLACK", "YELLOW", "VIOLET",
+                        "PINK", "AQUA"]
 
-        def get_capacity(fat_id):
-            if fat_id == "FAT_NOT_FOUND":
-                return ""
-            try:
-                num = int(fat_id[-2:])
-            except:
-                return ""
-            if 1 <= num <= 10:
-                return "24C/2T"
-            elif 11 <= num <= 15:
-                return "36C/3T"
-            elif 16 <= num <= 20:
-                return "48C/4T"
-            return ""
+        progress = st.progress(0)
+        total = len(hp)
 
-        def get_line(fat_id):
-            if fat_id and fat_id != "FAT_NOT_FOUND":
-                return fat_id[0]
-            return ""
-
-        # -------------------------------
-        # Loop isi HP
-        # -------------------------------
         for i, h in enumerate(hp):
-            if i >= len(df): 
+            if i >= len(df):
                 break
+
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
+            # ----- EXTRACT/block & homenumber seperti kode lama -----
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -211,6 +201,7 @@ def run_hpdb(HERE_API_KEY):
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
+            # ----- Cari FAT terdekat berdasarkan fatcode (nama FAT mengandung kode) -----
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
@@ -228,44 +219,86 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
-            # ---------------------------
-            # Tambahan logika otomatis
-            # ---------------------------
-            fat_id = df.at[i, "FAT ID"]
+            # ----------------------------
+            # LOGIKA BARU: FAT Port, FDT Tray, FDT Port, Line, Capacity, Tube Colour, Core Number
+            # ----------------------------
+            # Ambil nomor port dari fatcode jika bisa (A01 -> 1, B12 -> 12)
+            fat_port_num = None
+            if fc and len(fc) >= 2 and fc[1:].isdigit():
+                try:
+                    fat_port_num = int(fc[1:])
+                except:
+                    fat_port_num = None
 
-            df.at[i, "Capacity"] = get_capacity(fat_id)
-            df.at[i, "Line"] = get_line(fat_id)
-
-            # FDT Port + Tray
-            if fat_id not in fdt_port_counter:
-                fdt_port_counter[fat_id] = 1
-                tray_counter[fat_id] = 1
+            # FAT Port: gunakan angka dari fatcode jika valid, else fallback ke urutan i+1
+            if fat_port_num is not None:
+                df.at[i, "FAT Port"] = fat_port_num
             else:
-                fdt_port_counter[fat_id] += 1
-                if fdt_port_counter[fat_id] > 10:
-                    fdt_port_counter[fat_id] = 1
-                    tray_counter[fat_id] += 1
+                df.at[i, "FAT Port"] = (i % 20) + 1  # fallback 1..20
 
-            df.at[i, "FDT Port"] = fdt_port_counter[fat_id]
-            df.at[i, "FDT Tray (Front)"] = tray_counter[fat_id]
+            # FDT Tray (Front) dan FDT Port = siklus 1..10 berulang
+            # Prefer menggunakan FAT Port jika ada: map fat_port_num ke 1..10 siklus
+            if fat_port_num is not None:
+                tray_port_val = ((fat_port_num - 1) % 10) + 1
+            else:
+                tray_port_val = (i % 10) + 1
 
-            # Tube & Core
-            df.at[i, "Core Number"] = core_counter
-            df.at[i, "Tube Colour"] = tube_colour
+            df.at[i, "FDT Tray (Front)"] = tray_port_val
+            df.at[i, "FDT Port"] = tray_port_val
 
-            core_counter += 1
-            if core_counter > 10:
-                core_counter = 1
-                tube_colour += 1
+            # Line berdasarkan huruf depan fatcode (A/B/C/D)
+            if fc and fc[0] in ["A", "B", "C", "D"]:
+                df.at[i, "Line"] = f"Line {fc[0]}"
+            else:
+                df.at[i, "Line"] = "UNKNOWN"
 
-            # FAT Port = sama dengan FDT Port
-            df.at[i, "FAT Port"] = df.at[i, "FDT Port"]
+            # Capacity berdasarkan range nomor di fatcode
+            cap = "UNKNOWN"
+            if fat_port_num is not None:
+                if 1 <= fat_port_num <= 10:
+                    cap = "24C/2T"
+                elif 11 <= fat_port_num <= 15:
+                    cap = "36C/3T"
+                elif 16 <= fat_port_num <= 20:
+                    cap = "48C/4T"
+            df.at[i, "Capacity"] = cap
 
-            progress.progress(int((i + 1) * 100 / total))
+            # Tube Colour: siklus berdasarkan FDT Tray (Front)
+            # (Tray 1 -> first colour, Tray 2 -> second, dll)
+            tray_idx = int(df.at[i, "FDT Tray (Front)"]) - 1
+            df.at[i, "Tube Colour"] = tube_colours[tray_idx % len(tube_colours)]
+
+            # Core Number: berpasangan berdasarkan FAT Port nomor
+            # Aturan: port 1 -> cores "1,2"; port 2 -> "3,4"; port 3 -> "5,6" dst.
+            # Kita buat pasangan berdasarkan urutan natural FAT Port:
+            if fat_port_num is not None:
+                pair_start = (fat_port_num - 1) * 2 - ((fat_port_num - 1) // 10) * 20
+                # penyesuaian jika fat_port_num 1 -> 1,2; 2 -> 3,4; dst.
+                # tetapi untuk port > 10, akan menghasilkan lebih besar dari 20; 
+                # jika ingin siklus 1..20, gunakan mapping alternatif:
+                # simpler: buat pasangan linear: port_n -> ((n-1)*2+1, (n-1)*2+2)
+                start = (fat_port_num - 1) * 2 + 1
+                core_pair = f"{start},{start+1}"
+            else:
+                # fallback: pairing berdasarkan tray_port_val
+                start = (tray_port_val - 1) * 2 + 1
+                core_pair = f"{start},{start+1}"
+
+            df.at[i, "Core Number"] = core_pair
+
+            # update progress
+            progress.progress(int((i + 1) * 100 / max(1, total)))
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(10))
+        st.dataframe(df.head(20))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
+
+# Jika mau jalanin langsung (contoh):
+if __name__ == "__main__":
+    # Masukkan API KEY HERE-mu di sini jika mau test lokal
+    HERE_API_KEY = st.secrets.get("HERE_API_KEY", "") if "st" in globals() else ""
+    run_hpdb(HERE_API_KEY)
