@@ -8,15 +8,7 @@ import requests
 def run_hpdb(HERE_API_KEY):
 
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot⚡)")
-    st.markdown("""
-<h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
-✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
-1️⃣ <span style='color:#FF6B6B;'>TEMPLATE XLSX</span> harus disesuaikan jumlahnya dengan total homepass dari KMZ.<br>
-2️⃣ Block agar terpisah otomatis harus pakai titik, contoh <code>B.1</code> dan <code>A.1</code>.<br>
-3️⃣ Fitur otomatis: <span style='color:#34C759;'>FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass</span>.<br>
-4️⃣ OLT CODE agar otomatis, di dalam Description FDT wajib diisi kode OLT.<br>
-5️⃣ Street tidak semua bisa terisi otomatis karena ada beberapa jalan di maps bertanda unnamed road.
-""", unsafe_allow_html=True)
+    st.markdown("""...""", unsafe_allow_html=True)  # tetap pakai markdown kamu
 
     if st.button("🔒 Logout"):
         st.session_state["logged_in"] = False
@@ -150,24 +142,18 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        for col in ["block", "homenumber", "fdtcode", "oltcode",
-                    "FDT Tray (Front)", "FDT Port", "Line",
-                    "Capacity", "Tube Colour", "Core Number"]:
+        # pastikan kolom ada (tambahkan Line dan Capacity)
+        for col in ["block", "homenumber", "fdtcode", "oltcode", "Line", "Capacity"]:
             if col not in df.columns:
                 df[col] = ""
 
-        # ========================
-        # Assign otomatis HP ke DF
-        # ========================
         for i, h in enumerate(hp):
-            if i >= len(df):
+            if i >= len(df): 
                 break
-
-            # FAT Code dari path
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
-            # block & homenumber dari nama
+            # -- isi block / homenumber seperti sebelumnya --
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -176,7 +162,6 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "block"] = ""
                 df.at[i, "homenumber"] = h["name"]
 
-            # Koordinat HP
             df.at[i, "Latitude_homepass"] = h["lat"]
             df.at[i, "Longitude_homepass"] = h["lon"]
             df.at[i, "district"] = rc["district"]
@@ -188,7 +173,40 @@ def run_hpdb(HERE_API_KEY):
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
-            # FAT Mapping
+            # ------- LOGIKA BARU: isi Line & Capacity berdasarkan fatcode -------
+            # eks: fc = "A01" atau "B12"
+            line_val = ""
+            capacity_val = ""
+            try:
+                if isinstance(fc, str) and len(fc) >= 2 and fc[0] in "ABCD" and fc[1:].isdigit():
+                    letter = fc[0]
+                    num = int(fc[1:])  # '01' -> 1
+                    if 1 <= num <= 20:
+                        line_val = letter  # Line = A/B/C/D
+                        # Capacity mapping
+                        if 1 <= num <= 10:
+                            capacity_val = "24C/2T"
+                        elif 11 <= num <= 15:
+                            capacity_val = "36C/3T"
+                        elif 16 <= num <= 20:
+                            capacity_val = "48C/4T"
+                        else:
+                            capacity_val = ""
+                    else:
+                        # nomor di luar 1-20 => kosong/UNKNOWN sesuai kebutuhan
+                        line_val = ""
+                        capacity_val = ""
+                else:
+                    line_val = ""
+                    capacity_val = ""
+            except Exception:
+                line_val = ""
+                capacity_val = ""
+
+            df.at[i, "Line"] = line_val
+            df.at[i, "Capacity"] = capacity_val
+            # --------------------------------------------------------------------
+
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
@@ -206,25 +224,11 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
-            # ============================
-            # Logic FDT Tray, Tube, Core #
-            # ============================
-            tray = (i // 10) + 1
-            tube = (i // 10) + 1
-            core = (i % 10) + 1
-
-            df.at[i, "FDT Tray (Front)"] = tray
-            df.at[i, "Tube Colour"] = tube
-            df.at[i, "Core Number"] = core
-            df.at[i, "Line"] = "Line A"
-            df.at[i, "Capacity"] = "24C/2T"
-            df.at[i, "FDT Port"] = "None"
-
             progress.progress(int((i + 1) * 100 / total))
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(20))
+        st.dataframe(df.head(10))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
