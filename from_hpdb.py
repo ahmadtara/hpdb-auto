@@ -150,16 +150,24 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        for col in ["block", "homenumber", "fdtcode", "oltcode"]:
+        for col in ["block", "homenumber", "fdtcode", "oltcode",
+                    "FDT Tray (Front)", "FDT Port", "Line",
+                    "Capacity", "Tube Colour", "Core Number"]:
             if col not in df.columns:
                 df[col] = ""
 
+        # ========================
+        # Assign otomatis HP ke DF
+        # ========================
         for i, h in enumerate(hp):
-            if i >= len(df): 
+            if i >= len(df):
                 break
+
+            # FAT Code dari path
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
+            # block & homenumber dari nama
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -168,6 +176,7 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "block"] = ""
                 df.at[i, "homenumber"] = h["name"]
 
+            # Koordinat HP
             df.at[i, "Latitude_homepass"] = h["lat"]
             df.at[i, "Longitude_homepass"] = h["lon"]
             df.at[i, "district"] = rc["district"]
@@ -179,6 +188,7 @@ def run_hpdb(HERE_API_KEY):
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
+            # FAT Mapping
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
@@ -196,43 +206,25 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
-            # ========== Tambahan Logika Tray / Port ==========
-            core_num = i + 1  # urutan core dimulai dari 1
-            tray_num = ((core_num - 1) // 12) + 1  # tray naik setiap 12 core
+            # ============================
+            # Logic FDT Tray, Tube, Core #
+            # ============================
+            tray = (i // 10) + 1
+            tube = (i // 10) + 1
+            core = (i % 10) + 1
 
-            df.at[i, "Core Number"] = str(core_num)
-            df.at[i, "FAT Port"] = str(core_num)
-            df.at[i, "FDT Port"] = str(core_num)
-
-            # Tray & Tube Colour (pakai angka)
-            df.at[i, "FDT Tray (Front)"] = tray_num
-            df.at[i, "Tube Colour"] = tray_num
-
-            # Capacity otomatis kelipatan 12
-            df.at[i, "Capacity"] = f"{tray_num*12}C/{tray_num}T"
-
-            # Line dari huruf FAT ID terakhir
-            fatid = df.at[i, "FAT ID"]
-            if isinstance(fatid, str) and "." in fatid:
-                suffix = fatid.split(".")[-1][0].upper()
-                if suffix == "A":
-                    df.at[i, "Line"] = "Line A"
-                elif suffix == "B":
-                    df.at[i, "Line"] = "Line B"
-                elif suffix == "C":
-                    df.at[i, "Line"] = "Line C"
-                elif suffix == "D":
-                    df.at[i, "Line"] = "Line D"
-                else:
-                    df.at[i, "Line"] = "UNKNOWN"
-            else:
-                df.at[i, "Line"] = "UNKNOWN"
+            df.at[i, "FDT Tray (Front)"] = tray
+            df.at[i, "Tube Colour"] = tube
+            df.at[i, "Core Number"] = core
+            df.at[i, "Line"] = "Line A"
+            df.at[i, "Capacity"] = "24C/2T"
+            df.at[i, "FDT Port"] = "None"
 
             progress.progress(int((i + 1) * 100 / total))
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(10))
+        st.dataframe(df.head(20))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
