@@ -8,7 +8,15 @@ import requests
 def run_hpdb(HERE_API_KEY):
 
     st.title("📍 KMZ ➜ HPDB (Auto-Pilot⚡)")
-    st.markdown("""...""", unsafe_allow_html=True)  # tetap pakai markdown kamu
+    st.markdown(""" 
+<h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
+✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br><br>
+1️⃣ <span style='color:#FF6B6B;'>TEMPLATE XLSX</span> harus disesuaikan jumlahnya dengan total homepass dari KMZ.<br>
+2️⃣ Block agar terpisah otomatis harus pakai titik, contoh <code>B.1</code> dan <code>A.1</code>.<br>
+3️⃣ Fitur otomatis: <span style='color:#34C759;'>FAT ID, Pole ID, Pole Latitude, Pole Longitude, Clustername, street, homenumber, oltcode, fdtcode, fatcode, Latitude_homepass, Longitude_homepass</span>.<br>
+4️⃣ OLT CODE agar otomatis, di dalam Description FDT wajib diisi kode OLT.<br>
+5️⃣ Street tidak semua bisa terisi otomatis karena ada beberapa jalan di maps bertanda unnamed road.
+""", unsafe_allow_html=True)
 
     if st.button("🔒 Logout"):
         st.session_state["logged_in"] = False
@@ -89,7 +97,9 @@ def run_hpdb(HERE_API_KEY):
             return data
 
     def extract_fatcode(path):
+        # cari token 3-char yang cocok A01..D20 di path (folder names)
         for part in path.split("/"):
+            part = part.strip().upper()
             if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
                 return part
         return "UNKNOWN"
@@ -110,21 +120,24 @@ def run_hpdb(HERE_API_KEY):
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
+
+        # baca template (jangan overwrite kolom template yang sudah ada kecuali kolom yg ingin diisi otomatis)
         df = pd.read_excel(template_file)
-        fat = placemarks["FAT"]
-        hp = placemarks["HP COVER"]
-        fdt = placemarks["FDT"]
+
+        fat = placemarks.get("FAT", [])
+        hp = placemarks.get("HP COVER", [])
+        fdt = placemarks.get("FDT", [])
         all_poles = (
-            placemarks["NEW POLE 7-3"]
-            + placemarks["EXISTING POLE EMR 7-3"]
-            + placemarks["EXISTING POLE EMR 7-4"]
+            placemarks.get("NEW POLE 7-3", []) +
+            placemarks.get("EXISTING POLE EMR 7-3", []) +
+            placemarks.get("EXISTING POLE EMR 7-4", [])
         )
 
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
         fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
         oltcode = "UNKNOWN"
 
-        # Cari OLT dari description FDT
+        # Cari OLT dari description FDT (tetap seperti sebelumnya)
         if fdt:
             with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
                 f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
@@ -135,25 +148,38 @@ def run_hpdb(HERE_API_KEY):
                     name_el = pm.find("kml:name", ns)
                     desc_el = pm.find("kml:description", ns)
                     if name_el is not None and name_el.text.strip().upper() == fdtcode:
-                        if desc_el is not None:
+                        if desc_el is not None and desc_el.text:
                             oltcode = desc_el.text.strip().upper()
                         break
 
         progress = st.progress(0)
-        total = len(hp)
+        total = max(1, len(hp))
 
-        # pastikan kolom ada (tambahkan Line dan Capacity)
-        for col in ["block", "homenumber", "fdtcode", "oltcode", "Line", "Capacity"]:
+        # Pastikan kolom penting ada (tapi jangan touch kolom FDT Tray/Port/Tube/Core jika ada)
+        must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
+                     "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
+                     "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
+                     "Line", "Capacity"]
+        for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
 
+        # NOTE: kolom berikut dibiarkan dari template dan *TIDAK* di-overwrite:
+        template_preserve_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number", "FAT Port"]
+        # pastikan kolom exist (jika nggak ada di template, kita tetap jangan otomatis isi)
+        for c in template_preserve_cols:
+            if c not in df.columns:
+                # jika user memang tidak punya kolom ini, jangan buat default kosong
+                # tapi untuk safety kita buat supaya indexing baris nggak error saat write hasil
+                df[c] = df.get(c, "")
+
         for i, h in enumerate(hp):
-            if i >= len(df): 
+            if i >= len(df):
                 break
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
-            # -- isi block / homenumber seperti sebelumnya --
+            # parsing block / homenumber
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -162,6 +188,7 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "block"] = ""
                 df.at[i, "homenumber"] = h["name"]
 
+            # koordinat & alamat dasar
             df.at[i, "Latitude_homepass"] = h["lat"]
             df.at[i, "Longitude_homepass"] = h["lon"]
             df.at[i, "district"] = rc["district"]
@@ -173,40 +200,31 @@ def run_hpdb(HERE_API_KEY):
             hh = reverse_here(h["lat"], h["lon"])
             df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
-            # ------- LOGIKA BARU: isi Line & Capacity berdasarkan fatcode -------
-            # eks: fc = "A01" atau "B12"
+            # -- LOGIKA BARU: Line & Capacity berdasar fatcode (A01..D20)
             line_val = ""
             capacity_val = ""
-            try:
-                if isinstance(fc, str) and len(fc) >= 2 and fc[0] in "ABCD" and fc[1:].isdigit():
+            if isinstance(fc, str) and len(fc) >= 2 and fc[0] in "ABCD" and fc[1:].isdigit():
+                try:
                     letter = fc[0]
-                    num = int(fc[1:])  # '01' -> 1
+                    num = int(fc[1:])
                     if 1 <= num <= 20:
-                        line_val = letter  # Line = A/B/C/D
-                        # Capacity mapping
+                        line_val = letter
                         if 1 <= num <= 10:
                             capacity_val = "24C/2T"
                         elif 11 <= num <= 15:
                             capacity_val = "36C/3T"
                         elif 16 <= num <= 20:
                             capacity_val = "48C/4T"
-                        else:
-                            capacity_val = ""
-                    else:
-                        # nomor di luar 1-20 => kosong/UNKNOWN sesuai kebutuhan
-                        line_val = ""
-                        capacity_val = ""
-                else:
-                    line_val = ""
-                    capacity_val = ""
-            except Exception:
-                line_val = ""
-                capacity_val = ""
-
+                    # else: tetap kosong jika nomor di luar range
+                except Exception:
+                    pass
             df.at[i, "Line"] = line_val
             df.at[i, "Capacity"] = capacity_val
-            # --------------------------------------------------------------------
 
+            # Jangan ubah kolom FDT Tray/Port/Tube/Core — biarkan seperti template
+            # (KODE TIDAK menulis ke template_preserve_cols)
+
+            # Cari FAT terkait dan isi FAT-related fields
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
                 df.at[i, "FAT ID"] = mf["name"]
