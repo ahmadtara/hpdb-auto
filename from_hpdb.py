@@ -155,7 +155,7 @@ def run_hpdb(HERE_API_KEY):
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
                      "Line", "Capacity", "FAT Port",
-                     "FDT Tray (Front)", "FDT Port", "Tube Colo", "Core Number"]
+                     "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -262,3 +262,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
