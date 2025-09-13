@@ -4,6 +4,7 @@ import zipfile
 from lxml import etree
 from io import BytesIO
 import requests
+import re
 
 def run_hpdb(HERE_API_KEY):
 
@@ -114,6 +115,51 @@ def run_hpdb(HERE_API_KEY):
                 "street": comp.get("street", "").upper()
             }
         return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+
+    # ------------------------------
+    # helper: parse jumlah tube dari Capacity string (ex: "24C/2T" -> 2)
+    # ------------------------------
+    def parse_tubes_from_capacity(capacity_str):
+        if not isinstance(capacity_str, str):
+            return None
+        m = re.search(r'(\d+)\s*T', capacity_str.upper())
+        if m:
+            try:
+                return int(m.group(1))
+            except:
+                return None
+        # fallback: try after slash like /2T
+        m2 = re.search(r'/\s*(\d+)\s*T', capacity_str.upper())
+        if m2:
+            try:
+                return int(m2.group(1))
+            except:
+                return None
+        return None
+
+    # ------------------------------
+    # build global mapping (tray 1..4, per tray ports 1..10, per port two core entries)
+    # pattern matches mapping yang kamu kasih sebelumnya
+    # ------------------------------
+    def build_global_mapping():
+        mapping = []
+        for tray in range(1, 5):  # 1..4
+            # tray 1 & 3 use tube colours 1 & 2; tray 2 & 4 use tube colours 3 & 4
+            if tray in (1, 3):
+                tube_pair = [1, 2]
+            else:
+                tube_pair = [3, 4]
+            # for each tube in the pair: first tube -> ports 1..5; second -> ports 6..10
+            for t_idx, tube in enumerate(tube_pair):
+                for j in range(1, 6):  # j = 1..5
+                    port = t_idx * 5 + j  # gives 1..5 for first tube, 6..10 for second tube
+                    core1 = (j - 1) * 2 + 1
+                    core2 = core1 + 1
+                    mapping.append((tray, port, tube, core1))
+                    mapping.append((tray, port, tube, core2))
+        return mapping  # total 4 trays * (2 tubes * 5 ports * 2 cores) = 80 entries
+
+    global_mapping = build_global_mapping()
 
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
@@ -239,53 +285,55 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== MAPPING POLA TRAY ======
-        tray_mapping = [
-            (1, 1, 1, 1), (1, 1, 1, 2),
-            (1, 2, 1, 3), (1, 2, 1, 4),
-            (1, 3, 1, 5), (1, 3, 1, 6),
-            (1, 4, 1, 7), (1, 4, 1, 8),
-            (1, 5, 1, 9), (1, 5, 1, 10),
-            (1, 6, 2, 1), (1, 6, 2, 2),
-            (1, 7, 2, 3), (1, 7, 2, 4),
-            (1, 8, 2, 5), (1, 8, 2, 6),
-            (1, 9, 2, 7), (1, 9, 2, 8),
-            (1,10, 2, 9), (1,10, 2,10),
-            (2, 1, 3, 1), (2, 1, 3, 2),
-            (2, 2, 3, 3), (2, 2, 3, 4),
-            (2, 3, 3, 5), (2, 3, 3, 6),
-            (2, 4, 3, 7), (2, 4, 3, 8),
-            (2, 5, 3, 9), (2, 5, 3,10),
-            (2, 6, 4, 1), (2, 6, 4, 2),
-            (2, 7, 4, 3), (2, 7, 4, 4),
-            (2, 8, 4, 5), (2, 8, 4, 6),
-            (2, 9, 4, 7), (2, 9, 4, 8),
-            (2,10, 4, 9), (2,10, 4,10),
-            (3, 1, 1, 1), (3, 1, 1, 2),
-            (3, 2, 1, 3), (3, 2, 1, 4),
-            (3, 3, 1, 5), (3, 3, 1, 6),
-            (3, 4, 1, 7), (3, 4, 1, 8),
-            (3, 5, 1, 9), (3, 5, 1,10),
-            (3, 6, 2, 1), (3, 6, 2, 2),
-            (3, 7, 2, 3), (3, 7, 2, 4),
-            (3, 8, 2, 5), (3, 8, 2, 6),
-            (3, 9, 2, 7), (3, 9, 2, 8),
-            (3,10, 2, 9), (3,10, 2,10),
-            (4, 1, 3, 1), (4, 1, 3, 2),
-            (4, 2, 3, 3), (4, 2, 3, 4),
-            (4, 3, 3, 5), (4, 3, 3, 6),
-        ]
-
+        # ====== FILL FDT TRAY/PORT/TUBE/CORE BERDASARKAN LINE & CAPACITY ======
+        # Precompute a per-fat mapping based on global_mapping, line, and capacity
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            for i, idx in enumerate(group.index, start=0):
-                if i < len(tray_mapping):
-                    tray, port, tube, core = tray_mapping[i]
-                    df.at[idx, "FDT Tray (Front)"] = tray
-                    df.at[idx, "FDT Port"] = port
-                    df.at[idx, "Tube Colour"] = tube
-                    df.at[idx, "Core Number"] = core
+
+            # read line and capacity for this FAT
+            line_val = group["Line"].iloc[0] if "Line" in group.columns else ""
+            capacity_val = group["Capacity"].iloc[0] if "Capacity" in group.columns else ""
+
+            # normalize line letter
+            line_letter = (str(line_val).strip().upper() or "A")
+            if line_letter not in list("ABCD"):
+                line_letter = "A"
+
+            # parse tube count from capacity (2T, 3T, 4T)
+            tubes_needed = parse_tubes_from_capacity(capacity_val) or 2
+            if tubes_needed < 1:
+                tubes_needed = 2
+            # clamp to max 4 (we only have 4 tube colours in mapping)
+            tubes_needed = min(tubes_needed, 4)
+
+            # starting tube based on Line letter: A->1, B->2, C->3, D->4
+            start_tube = ord(line_letter) - ord("A") + 1
+
+            # allowed tube colours for this FAT (wrap-around)
+            allowed_tubes = [((start_tube - 1 + i) % 4) + 1 for i in range(tubes_needed)]
+
+            # filter global_mapping to only entries that use allowed_tubes
+            filtered = [m for m in global_mapping if m[2] in allowed_tubes]
+
+            # rotate filtered so first entry starts at first occurrence of start_tube (if present)
+            rot_index = next((i for i, mm in enumerate(filtered) if mm[2] == start_tube), 0)
+            if rot_index:
+                filtered = filtered[rot_index:] + filtered[:rot_index]
+
+            # safety fallback: if filtered empty (shouldn't happen), use global mapping
+            if not filtered:
+                filtered = global_mapping.copy()
+
+            # assign to rows in group in their order (group.index preserves order)
+            for j, idx in enumerate(group.index):
+                # pick mapping entry cycling through filtered if needed
+                map_entry = filtered[j % len(filtered)]
+                tray_val, fdt_port_val, tube_val, core_val = map_entry
+                df.at[idx, "FDT Tray (Front)"] = tray_val
+                df.at[idx, "FDT Port"] = fdt_port_val
+                df.at[idx, "Tube Colour"] = tube_val
+                df.at[idx, "Core Number"] = core_val
 
         progress.empty()
         st.success("✅ Selesai!")
