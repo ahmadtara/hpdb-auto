@@ -150,11 +150,13 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        # pastikan kolom wajib ada
-        must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
-                     "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
-                     "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-                     "Line", "Capacity", "FAT Port", "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
+        must_cols = [
+            "block", "homenumber", "fdtcode", "oltcode", "fatcode",
+            "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
+            "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
+            "Line", "Capacity", "FAT Port",
+            "FDT Tray (Front)", "FDT Port", "Core Number"
+        ]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -165,7 +167,6 @@ def run_hpdb(HERE_API_KEY):
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
-            # parsing block & homenumber
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -210,7 +211,7 @@ def run_hpdb(HERE_API_KEY):
             for i, idx in enumerate(group.index, start=1):
                 df.at[idx, "FAT Port"] = i
 
-        # ====== AUTO FILL LINE, CAPACITY (tetap seperti semula) ======
+        # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
@@ -220,7 +221,7 @@ def run_hpdb(HERE_API_KEY):
             fc = fatcodes[0]
             letter = fc[0] if fc and fc[0] in "ABCD" else ""
             try:
-                nums = [int(x[1:]) for x in fatcodes if len(x) >= 2]
+                nums = [int(fc[1:]) for fc in fatcodes if len(fc) >= 2]
                 max_num = max(nums) if nums else 0
             except:
                 max_num = 0
@@ -238,76 +239,38 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== AUTO FILL FDT Tray, FDT Port, Tube Colour (angka), Core Number ====
-        # Pola persis berdasarkan database (foto ketiga):
-        # - 2 FAT Port -> 1 FDT Port (FDT Port = ceil(FAT Port/2))
-        # - 1 TRAY = 10 FDT Port (port 1..10)
-        # - Dalam tray: ports 1-5 => tube slot 1 ; ports 6-10 => tube slot 2
-        # - Tube numbering pattern (sesuai foto):
-        #     -> tray odd  : tube numbers 1 & 2
-        #     -> tray even : tube numbers 3 & 4
-        #   (pattern ini berulang)
-        # - Core number di dalam tube: tiap FDT Port punya 2 core: port1->cores1&2, port2->3&4, ... sampai 10
+        # ====== AUTO FILL FDT Tray, FDT Port & Core Number ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
 
-            # process each row (row = satu FAT Port)
+            fdt_port_counter = 0
+            core_counter = 0
+
             for idx in group.index:
-                # Ambil FAT Port yang sudah diisi sebelumnya
-                fat_port_raw = df.at[idx, "FAT Port"]
-                try:
-                    fat_port_val = int(fat_port_raw)
-                except Exception:
-                    # fallback: gunakan posisi dalam group (1-based)
-                    local_pos = list(group.index).index(idx) + 1
-                    fat_port_val = local_pos
+                fat_port = df.at[idx, "FAT Port"]
 
-                # FDT Port = ceil(FAT Port / 2)
-                fdt_port_num = (fat_port_val + 1) // 2
+                if fat_port == 1:
+                    fdt_port_counter += 1
+                    if fdt_port_counter > 10:
+                        fdt_port_counter = 1
 
-                # Tray number (1-based), setiap 10 FDT Port = 1 tray
-                tray_num = (fdt_port_num - 1) // 10 + 1
+                    core_counter += 1
+                    if core_counter > 10:
+                        core_counter = 1
 
-                # Port number IN TRAY (1..10)
-                port_in_tray = ((fdt_port_num - 1) % 10) + 1
+                df.at[idx, "FDT Tray (Front)"] = 1
+                df.at[idx, "FDT Port"] = fdt_port_counter
 
-                # Tube slot in tray (1 or 2)
-                tube_slot_in_tray = ((port_in_tray - 1) // 5) + 1  # 1 or 2
-
-                # Tube numbering PATTERN per foto:
-                # tray odd -> tube numbers 1 & 2
-                # tray even -> tube numbers 3 & 4
-                if tray_num % 2 == 1:
-                    tube_number = tube_slot_in_tray  # 1 or 2
-                else:
-                    tube_number = 2 + tube_slot_in_tray  # 3 or 4
-
-                # Port position inside tube (1..5)
-                port_pos_in_tube = ((port_in_tray - 1) % 5) + 1
-
-                # offset in port: odd FAT Port -> first core of the port, even FAT Port -> second core
-                offset_in_port = 1 if (fat_port_val % 2 == 1) else 2
-
-                # Core number within tube (1..10)
-                core_number = (port_pos_in_tube - 1) * 2 + offset_in_port
-
-                # Write Tube Colour (angka) and Core Number for every FAT Port row
-                df.at[idx, "Tube Colour"] = int(tube_number)
-                df.at[idx, "Core Number"] = int(core_number)
-
-                # Only write FDT Tray & FDT Port on the FIRST row of the pair (i.e., when FAT Port is odd)
-                if fat_port_val % 2 == 1:
-                    df.at[idx, "FDT Tray (Front)"] = int(tray_num)
-                    df.at[idx, "FDT Port"] = int(port_in_tray)
-                else:
-                    # keep blank for second row of the pair
-                    df.at[idx, "FDT Tray (Front)"] = ""
-                    df.at[idx, "FDT Port"] = ""
+                if fat_port in [1, 2]:
+                    df.at[idx, "Core Number"] = core_counter
+                    core_counter += 1
+                    if core_counter > 10:
+                        core_counter = 1
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(40))
+        st.dataframe(df.head(10))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
