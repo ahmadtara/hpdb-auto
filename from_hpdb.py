@@ -104,10 +104,7 @@ def run_hpdb(HERE_API_KEY):
 
     def reverse_here(lat, lon):
         url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
-        try:
-            r = requests.get(url, timeout=10)
-        except Exception:
-            return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+        r = requests.get(url)
         if r.status_code == 200:
             comp = r.json().get("items", [{}])[0].get("address", {})
             return {
@@ -118,65 +115,17 @@ def run_hpdb(HERE_API_KEY):
             }
         return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
 
-    # fungsi pola baru
-    def generate_pattern(line, capacity, n):
-    """
-    line: 'A' atau 'B'
-    capacity: contoh '24C/2T', '36C/3T', '48C/4T'
-    n: jumlah baris yang dibutuhkan
-    """
-    patterns = []
-    tray = 1
-    port = 1
-    tube = 1
-    core = 1
-
-    if capacity in ["24C/2T", "36C/3T", "48C/4T"]:
-        max_tray = int(capacity.split("/")[1][0])  # ambil angka sebelum 'T'
-        while len(patterns) < n:
-            # 2 core per port
-            patterns.append({"FDT Tray (Front)": tray, "FDT Port": port, "Tube Colour": tube, "Core Number": core})
-            core += 1
-            patterns.append({"FDT Tray (Front)": tray, "FDT Port": port, "Tube Colour": tube, "Core Number": core})
-            core += 1
-            port += 1
-            if port > 10:  # tiap tray max 10 port
-                port = 1
-                tray += 1
-                tube += 1
-                if tray > max_tray:  # reset kalau tray melebihi kapasitas
-                    tray = 1
-                    tube = 1
-        return patterns[:n]
-    else:
-        return [{} for _ in range(n)]  # kalau kapasitas tak dikenal
-
-
-    # ----- Proses utama -----
     if kmz_file and template_file:
-        try:
-            kmz_bytes = kmz_file.read()
-            placemarks = extract_placemarks(kmz_bytes)
-        except Exception as e:
-            st.error(f"❌ Gagal membaca KMZ: {e}")
-            return
-
-        try:
-            template_bytes = template_file.read()
-            template_df = pd.read_excel(BytesIO(template_bytes))
-        except Exception as e:
-            st.error(f"❌ Gagal membaca TEMPLATE XLSX: {e}")
-            return
-
-        df = template_df.copy()
-
-        fat = placemarks.get("FAT", [])
-        hp = placemarks.get("HP COVER", [])
-        fdt = placemarks.get("FDT", [])
+        kmz_bytes = kmz_file.read()
+        placemarks = extract_placemarks(kmz_bytes)
+        df = pd.read_excel(template_file)
+        fat = placemarks["FAT"]
+        hp = placemarks["HP COVER"]
+        fdt = placemarks["FDT"]
         all_poles = (
-            placemarks.get("NEW POLE 7-3", [])
-            + placemarks.get("EXISTING POLE EMR 7-3", [])
-            + placemarks.get("EXISTING POLE EMR 7-4", [])
+            placemarks["NEW POLE 7-3"]
+            + placemarks["EXISTING POLE EMR 7-3"]
+            + placemarks["EXISTING POLE EMR 7-4"]
         )
 
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
@@ -185,22 +134,23 @@ def run_hpdb(HERE_API_KEY):
 
         # Cari OLT dari description FDT
         if fdt:
-            try:
-                with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-                    f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-                    parser = etree.XMLParser(recover=True)
-                    root = etree.parse(z.open(f), parser=parser).getroot()
-                    ns = {"kml": "http://www.opengis.net/kml/2.2"}
-                    for pm in root.findall(".//kml:Placemark", ns):
-                        name_el = pm.find("kml:name", ns)
-                        desc_el = pm.find("kml:description", ns)
-                        if name_el is not None and name_el.text and name_el.text.strip().upper() == fdtcode:
-                            if desc_el is not None and desc_el.text:
-                                oltcode = desc_el.text.strip().upper()
-                            break
-            except Exception:
-                oltcode = "UNKNOWN"
+            with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+                f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+                parser = etree.XMLParser(recover=True)
+                root = etree.parse(z.open(f), parser=parser).getroot()
+                ns = {"kml": "http://www.opengis.net/kml/2.2"}
+                for pm in root.findall(".//kml:Placemark", ns):
+                    name_el = pm.find("kml:name", ns)
+                    desc_el = pm.find("kml:description", ns)
+                    if name_el is not None and name_el.text.strip().upper() == fdtcode:
+                        if desc_el is not None:
+                            oltcode = desc_el.text.strip().upper()
+                        break
 
+        progress = st.progress(0)
+        total = len(hp)
+
+        # pastikan kolom wajib ada
         must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
@@ -210,14 +160,13 @@ def run_hpdb(HERE_API_KEY):
             if col not in df.columns:
                 df[col] = ""
 
-        progress = st.progress(0)
-        total = len(hp) if hp else 0
         for i, h in enumerate(hp):
             if i >= len(df):
                 break
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
+            # parsing block & homenumber
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -228,14 +177,14 @@ def run_hpdb(HERE_API_KEY):
 
             df.at[i, "Latitude_homepass"] = h["lat"]
             df.at[i, "Longitude_homepass"] = h["lon"]
-            df.at[i, "district"] = rc.get("district", "")
-            df.at[i, "subdistrict"] = rc.get("subdistrict", "")
-            df.at[i, "postalcode"] = rc.get("postalcode", "")
+            df.at[i, "district"] = rc["district"]
+            df.at[i, "subdistrict"] = rc["subdistrict"]
+            df.at[i, "postalcode"] = rc["postalcode"]
             df.at[i, "fdtcode"] = fdtcode
             df.at[i, "oltcode"] = oltcode
 
             hh = reverse_here(h["lat"], h["lon"])
-            df.at[i, "street"] = hh.get("street", "").replace("JALAN ", "").strip()
+            df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
 
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
@@ -247,25 +196,22 @@ def run_hpdb(HERE_API_KEY):
                     "POLE_NOT_FOUND"
                 )
                 df.at[i, "Pole ID"] = pol
-                fataddr = reverse_here(mf["lat"], mf["lon"])["street"]
-                df.at[i, "FAT Address"] = fataddr
+                df.at[i, "FAT Address"] = reverse_here(mf["lat"], mf["lon"])["street"]
             else:
                 df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
-            if total > 0:
-                progress.progress(int((i + 1) * 100 / total))
+            progress.progress(int((i + 1) * 100 / max(1, len(hp))))
 
-        # AUTO FILL FAT PORT
+        # ====== AUTO FILL FAT PORT ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            for j, idx in enumerate(group.index, start=1):
-                df.at[idx, "FAT Port"] = j
+            for i, idx in enumerate(group.index, start=1):
+                df.at[idx, "FAT Port"] = i
 
-        # AUTO FILL LINE & CAPACITY
-        fat_capacity_map = {}
+        # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
@@ -275,12 +221,16 @@ def run_hpdb(HERE_API_KEY):
             fc = fatcodes[0]
             letter = fc[0] if fc and fc[0] in "ABCD" else ""
             try:
-                nums = [int(x[1:]) for x in fatcodes if len(x) >= 2 and x[1:].isdigit()]
+                nums = [int(fc[1:]) for fc in fatcodes if len(fc) >= 2]
                 max_num = max(nums) if nums else 0
-            except Exception:
+            except:
                 max_num = 0
 
-            if 1 <= max_num <= 20:
+            if 1 <= max_num <= 10:
+                cap_val = "24C/2T"
+            elif 11 <= max_num <= 15:
+                cap_val = "36C/3T"
+            elif 16 <= max_num <= 20:
                 cap_val = "48C/4T"
             else:
                 cap_val = ""
@@ -289,18 +239,53 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-            fat_capacity_map[fat_id] = cap_val
+        # ====== MAPPING POLA TRAY ======
+        tray_mapping = [
+            (1, 1, 1, 1), (1, 1, 1, 2),
+            (1, 2, 1, 3), (1, 2, 1, 4),
+            (1, 3, 1, 5), (1, 3, 1, 6),
+            (1, 4, 1, 7), (1, 4, 1, 8),
+            (1, 5, 1, 9), (1, 5, 1, 10),
+            (1, 6, 2, 1), (1, 6, 2, 2),
+            (1, 7, 2, 3), (1, 7, 2, 4),
+            (1, 8, 2, 5), (1, 8, 2, 6),
+            (1, 9, 2, 7), (1, 9, 2, 8),
+            (1,10, 2, 9), (1,10, 2,10),
+            (2, 1, 3, 1), (2, 1, 3, 2),
+            (2, 2, 3, 3), (2, 2, 3, 4),
+            (2, 3, 3, 5), (2, 3, 3, 6),
+            (2, 4, 3, 7), (2, 4, 3, 8),
+            (2, 5, 3, 9), (2, 5, 3,10),
+            (2, 6, 4, 1), (2, 6, 4, 2),
+            (2, 7, 4, 3), (2, 7, 4, 4),
+            (2, 8, 4, 5), (2, 8, 4, 6),
+            (2, 9, 4, 7), (2, 9, 4, 8),
+            (2,10, 4, 9), (2,10, 4,10),
+            (3, 1, 1, 1), (3, 1, 1, 2),
+            (3, 2, 1, 3), (3, 2, 1, 4),
+            (3, 3, 1, 5), (3, 3, 1, 6),
+            (3, 4, 1, 7), (3, 4, 1, 8),
+            (3, 5, 1, 9), (3, 5, 1,10),
+            (3, 6, 2, 1), (3, 6, 2, 2),
+            (3, 7, 2, 3), (3, 7, 2, 4),
+            (3, 8, 2, 5), (3, 8, 2, 6),
+            (3, 9, 2, 7), (3, 9, 2, 8),
+            (3,10, 2, 9), (3,10, 2,10),
+            (4, 1, 3, 1), (4, 1, 3, 2),
+            (4, 2, 3, 3), (4, 2, 3, 4),
+            (4, 3, 3, 5), (4, 3, 3, 6),
+        ]
 
-        # ISI pola baru
         for fat_id, group in df.groupby("FAT ID", sort=False):
-            cap_val = fat_capacity_map.get(fat_id, "")
-            if not cap_val:
+            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            line_val = df.at[group.index[0], "Line"]
-            pats = generate_pattern(line_val, cap_val, len(group))
-            for idx, pat in zip(group.index, pats):
-                for k, v in pat.items():
-                    df.at[idx, k] = v
+            for i, idx in enumerate(group.index, start=0):
+                if i < len(tray_mapping):
+                    tray, port, tube, core = tray_mapping[i]
+                    df.at[idx, "FDT Tray (Front)"] = tray
+                    df.at[idx, "FDT Port"] = port
+                    df.at[idx, "Tube Colour"] = tube
+                    df.at[idx, "Core Number"] = core
 
         progress.empty()
         st.success("✅ Selesai!")
