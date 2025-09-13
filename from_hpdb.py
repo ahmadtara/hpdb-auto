@@ -154,7 +154,8 @@ def run_hpdb(HERE_API_KEY):
         must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-                     "Line", "Capacity", "FAT Port"]
+                     "Line", "Capacity", "FAT Port",
+                     "FDT Tray (Front)", "FDT Port", "Tube Colo", "Core Number"]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -237,6 +238,23 @@ def run_hpdb(HERE_API_KEY):
             first_idx = group.index[0]
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
+
+        # ====== COPY FDT TRAY / PORT / TUBE / CORE SESUAI FAT PORT ======
+        mapping_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colo", "Core Number"]
+        mapping_df = pd.read_excel(template_file, usecols=mapping_cols)
+        mapping_df = mapping_df.dropna(how="all").reset_index(drop=True)
+
+        for idx, row in df.iterrows():
+            try:
+                fat_port = int(row["FAT Port"])
+            except:
+                continue
+            if fat_port <= 0 or fat_port > len(mapping_df):
+                continue
+            map_row = mapping_df.iloc[fat_port - 1]
+            for col in mapping_cols:
+                if col in df.columns:
+                    df.at[idx, col] = map_row[col]
 
         progress.empty()
         st.success("✅ Selesai!")
