@@ -118,7 +118,14 @@ def run_hpdb(HERE_API_KEY):
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
-        df = pd.read_excel(template_file)
+
+        # baca sheet utama HPDB
+        df = pd.read_excel(template_file, sheet_name="Homepass Database")
+
+        # baca mapping dari sheet yg sama
+        expected_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
+        mapping_df = df[expected_cols].dropna(how="all").reset_index(drop=True)
+
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
@@ -239,22 +246,20 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY FDT TRAY / PORT / TUBE / CORE SESUAI FAT PORT ======
-        mapping_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colo", "Core Number"]
-        mapping_df = pd.read_excel(template_file, usecols=mapping_cols)
-        mapping_df = mapping_df.dropna(how="all").reset_index(drop=True)
-
-        for idx, row in df.iterrows():
-            try:
-                fat_port = int(row["FAT Port"])
-            except:
+        # ====== COPY MAPPING KE HOMEASS (per 2 baris FAT Port) ======
+        mapping_idx = 0
+        for fat_id, group in df.groupby("FAT ID", sort=False):
+            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            if fat_port <= 0 or fat_port > len(mapping_df):
-                continue
-            map_row = mapping_df.iloc[fat_port - 1]
-            for col in mapping_cols:
-                if col in df.columns:
-                    df.at[idx, col] = map_row[col]
+            for i, idx in enumerate(group.index, start=1):
+                if i % 2 == 1 and mapping_idx < len(mapping_df):
+                    row_map = mapping_df.iloc[mapping_idx]
+                df.at[idx, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
+                df.at[idx, "FDT Port"] = row_map["FDT Port"]
+                df.at[idx, "Tube Colour"] = row_map["Tube Colour"]
+                df.at[idx, "Core Number"] = row_map["Core Number"]
+                if i % 2 == 0:
+                    mapping_idx += 1
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -262,4 +267,3 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
