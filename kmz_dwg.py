@@ -319,7 +319,7 @@ def run_kmz_to_dwg():
 1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
 2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
-            
+               
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
@@ -346,6 +346,7 @@ if uploaded_kmz and uploaded_template:
                     st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
         except Exception as e:
             st.error(f"❌ Gagal memproses: {e}")
+
 
 
 
