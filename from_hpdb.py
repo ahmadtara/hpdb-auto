@@ -210,10 +210,7 @@ def run_hpdb(HERE_API_KEY):
             for i, idx in enumerate(group.index, start=1):
                 df.at[idx, "FAT Port"] = i
 
-        # ====== AUTO FILL LINE, CAPACITY, FDT Tray, Port, Tube, Core ======
-        tube_colours = ["BLUE", "ORANGE", "GREEN", "BROWN", "SLATE", "WHITE",
-                        "RED", "BLACK", "YELLOW", "VIOLET", "ROSE", "AQUA"]
-
+        # ====== AUTO FILL LINE, CAPACITY (tetap seperti semula) ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
@@ -223,48 +220,73 @@ def run_hpdb(HERE_API_KEY):
             fc = fatcodes[0]
             letter = fc[0] if fc and fc[0] in "ABCD" else ""
             try:
-                nums = [int(fc[1:]) for fc in fatcodes if len(fc) >= 2]
+                nums = [int(x[1:]) for x in fatcodes if len(x) >= 2]
                 max_num = max(nums) if nums else 0
             except:
                 max_num = 0
 
             if 1 <= max_num <= 10:
                 cap_val = "24C/2T"
-                total_core = 24
-                total_tube = 2
             elif 11 <= max_num <= 15:
                 cap_val = "36C/3T"
-                total_core = 36
-                total_tube = 3
             elif 16 <= max_num <= 20:
                 cap_val = "48C/4T"
-                total_core = 48
-                total_tube = 4
             else:
                 cap_val = ""
-                total_core = 0
-                total_tube = 0
 
             first_idx = group.index[0]
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-            core_per_tube = 12 if total_tube > 0 else 0
-            for j, idx in enumerate(group.index):
-                df.at[idx, "FDT Tray (Front)"] = "TRAY-1"
-                df.at[idx, "FDT Port"] = j + 1
-                if total_core > 0:
-                    tube_idx = (j // core_per_tube) % total_tube
-                    core_idx = (j % core_per_tube) + 1
-                    df.at[idx, "Tube Colour"] = tube_colours[tube_idx % len(tube_colours)]
-                    df.at[idx, "Core Number"] = core_idx
-                else:
-                    df.at[idx, "Tube Colour"] = ""
-                    df.at[idx, "Core Number"] = ""
+        # ====== AUTO FILL FDT Tray, FDT Port, Tube Colour (angka), Core Number ======
+        # Pola yang dipakai berdasar database contohmu:
+        # - 2 FAT Port -> 1 FDT Port (jadi tiap 2 baris homepass = 1 FDT Port)
+        # - 1 tray = 10 FDT Port
+        # - 1 tube = 5 FDT Port (=> 10 core per tube), tube number increment per 5 ports in tray
+        for fat_id, group in df.groupby("FAT ID", sort=False):
+            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+                continue
+            # Process rows in the order they appear in df (group is already ordered)
+            for local_pos, idx in enumerate(group.index, start=1):
+                # gunakan FAT Port jika ada (lebih aman), fallback ke local_pos
+                try:
+                    fat_port_val = int(group.loc[idx, "FAT Port"])
+                except Exception:
+                    fat_port_val = local_pos
+
+                # FDT Port number (ceil of fat_port/2)
+                fdt_port_num = (fat_port_val + 1) // 2
+
+                # Tray number (1-based), tiap 10 FDT Port => 1 tray
+                tray_num = (fdt_port_num - 1) // 10 + 1
+
+                # Port number di dalam tray (1..10)
+                port_in_tray = ((fdt_port_num - 1) % 10) + 1
+
+                # Tube index in tray: ports 1-5 => tube slot 1, ports 6-10 => tube slot 2
+                tube_slot_in_tray = ( (port_in_tray - 1) // 5 ) + 1  # 1 or 2
+
+                # Tube global number (angka) sesuai contoh:
+                # tray1 => tubes 1 & 2, tray2 => tubes 3 & 4, dst
+                tube_number = (tray_num - 1) * 2 + tube_slot_in_tray
+
+                # Core number within tube (1..10): setiap FDT Port punya 2 core (port1 -> cores 1&2, port2 -> 3&4, ...)
+                # compute base = (port_in_tray_in_same_tube - 1) * 2 + offset
+                # port position inside the tube (1..5)
+                port_pos_in_tube = ((port_in_tray - 1) % 5) + 1
+                # if fat_port_val is odd => first core of the port (1), else second core (2)
+                offset_in_port = 1 if (fat_port_val % 2 == 1) else 2
+                core_number = (port_pos_in_tube - 1) * 2 + offset_in_port
+
+                # Tulis ke dataframe. Sesuaikan format 'TRAY-1' kalau mau string, sekarang saya pakai 'TRAY-{n}'
+                df.at[idx, "FDT Tray (Front)"] = f"TRAY-{tray_num}"
+                df.at[idx, "FDT Port"] = port_in_tray
+                df.at[idx, "Tube Colour"] = tube_number   # angka sesuai permintaan
+                df.at[idx, "Core Number"] = core_number
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(10))
+        st.dataframe(df.head(20))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
