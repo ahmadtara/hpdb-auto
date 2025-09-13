@@ -150,13 +150,11 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        must_cols = [
-            "block", "homenumber", "fdtcode", "oltcode", "fatcode",
-            "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
-            "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-            "Line", "Capacity", "FAT Port",
-            "FDT Tray (Front)", "FDT Port", "Core Number"
-        ]
+        # pastikan kolom wajib ada
+        must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
+                     "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
+                     "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
+                     "Line", "Capacity", "FAT Port", "FDT Tray (Front)", "FDT Port"]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -167,6 +165,7 @@ def run_hpdb(HERE_API_KEY):
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
+            # parsing block & homenumber
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -239,34 +238,29 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== AUTO FILL FDT Tray, FDT Port & Core Number ======
+        # ====== AUTO FILL FDT Tray (Front) & FDT Port ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
 
-            fdt_port_counter = 0
-            core_counter = 0
-
+            fdt_port_counter = 1  # mulai dari 1
             for idx in group.index:
-                fat_port = df.at[idx, "FAT Port"]
-
-                if fat_port == 1:
-                    fdt_port_counter += 1
-                    if fdt_port_counter > 10:
-                        fdt_port_counter = 1
-
-                    core_counter += 1
-                    if core_counter > 10:
-                        core_counter = 1
-
+                # Tray selalu isi 1
                 df.at[idx, "FDT Tray (Front)"] = 1
-                df.at[idx, "FDT Port"] = fdt_port_counter
 
-                if fat_port in [1, 2]:
-                    df.at[idx, "Core Number"] = core_counter
-                    core_counter += 1
-                    if core_counter > 10:
-                        core_counter = 1
+                # Kalau FAT Port = 1, maka assign FDT Port saat ini
+                if str(df.at[idx, "FAT Port"]) == "1":
+                    df.at[idx, "FDT Port"] = fdt_port_counter
+                    fdt_port_counter += 1
+                    if fdt_port_counter > 10:  # reset ke 1 lagi
+                        fdt_port_counter = 1
+                else:
+                    # kalau FAT Port bukan 1, ikut nilai FDT Port sebelumnya
+                    prev_idx = idx - 1
+                    if prev_idx in df.index:
+                        df.at[idx, "FDT Port"] = df.at[prev_idx, "FDT Port"]
+                    else:
+                        df.at[idx, "FDT Port"] = fdt_port_counter
 
         progress.empty()
         st.success("✅ Selesai!")
