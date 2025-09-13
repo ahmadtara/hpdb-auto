@@ -14,7 +14,7 @@ st.set_page_config(page_title="MyRepublic Toolkit", layout="wide")
 # -------------- ✅ USER LOGIN ---------------- #
 valid_users = {
     "zikni": "zikni",
-    "kampang": "kampang",
+    "vendor": "vendor",
     "toko": "toko"
 }
 blocked_users = set()
@@ -104,4 +104,5 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
