@@ -211,7 +211,7 @@ if kmz_file and template_file:
         for i, idx in enumerate(group.index, start=1):
             df.at[idx, "FAT Port"] = i
 
-    # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
+    # ====== AUTO FILL LINE, CAPACITY, FDT Tray, Port, Tube, Core ======
     for fat_id, group in df.groupby("FAT ID", sort=False):
         if fat_id == "" or fat_id == "FAT_NOT_FOUND":
             continue
@@ -243,21 +243,18 @@ if kmz_file and template_file:
         df.at[first_idx, "Line"] = f"LINE {letter}" if letter else ""
         df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== AUTO FILL Tray, Port, Tube, Core ======
         tray_counter = 1
         port_counter = 1
         for i, idx in enumerate(group.index, start=1):
             df.at[idx, "FDT Tray (Front)"] = tray_counter
             df.at[idx, "FDT Port"] = port_counter
 
-            # tube dan core
             tube = ((i - 1) // 12) % total_tubes + 1
             core = (i - 1) % 12 + 1
 
             df.at[idx, "Tube Colour"] = tube
             df.at[idx, "Core Number"] = core
 
-            # jika port sudah mencapai kapasitas, reset port naik tray
             if core == 12 and tube == total_tubes:
                 tray_counter += 1
                 port_counter = 1
