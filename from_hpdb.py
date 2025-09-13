@@ -118,7 +118,11 @@ def run_hpdb(HERE_API_KEY):
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
-        df = pd.read_excel(template_file)
+
+        # === baca template untuk ambil pola ===
+        template_df = pd.read_excel(template_file)
+        df = template_df.copy()
+
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
@@ -154,11 +158,22 @@ def run_hpdb(HERE_API_KEY):
         must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-                     "Line", "Capacity", "FAT Port"]
+                     "Line", "Capacity", "FAT Port",
+                     "FDT Tray (Front)", "Tube Colour", "Core Number"]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
 
+        # === siapkan pola dari template ===
+        pattern_cols = ["Capacity", "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
+        patterns = {}
+        for col in pattern_cols:
+            if col in template_df.columns:
+                vals = template_df[col].dropna().tolist()
+                if vals:
+                    patterns[col] = vals
+
+        # === isi data HP ===
         for i, h in enumerate(hp):
             if i >= len(df):
                 break
@@ -201,42 +216,18 @@ def run_hpdb(HERE_API_KEY):
                 df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
                 df.at[i, "FAT Address"] = ""
 
+            # isi pola dari template (Capacity, Tray, Port, Tube, Core)
+            for col, vals in patterns.items():
+                df.at[i, col] = vals[i % len(vals)]
+
             progress.progress(int((i + 1) * 100 / max(1, len(hp))))
 
-        # ====== AUTO FILL FAT PORT ======
+        # ====== AUTO FILL FAT PORT (urut per FAT ID) ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            for i, idx in enumerate(group.index, start=1):
-                df.at[idx, "FAT Port"] = i
-
-        # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
-        for fat_id, group in df.groupby("FAT ID", sort=False):
-            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-                continue
-            fatcodes = group["fatcode"].dropna().unique()
-            if len(fatcodes) == 0:
-                continue
-            fc = fatcodes[0]
-            letter = fc[0] if fc and fc[0] in "ABCD" else ""
-            try:
-                nums = [int(fc[1:]) for fc in fatcodes if len(fc) >= 2]
-                max_num = max(nums) if nums else 0
-            except:
-                max_num = 0
-
-            if 1 <= max_num <= 10:
-                cap_val = "24C/2T"
-            elif 11 <= max_num <= 15:
-                cap_val = "36C/3T"
-            elif 16 <= max_num <= 20:
-                cap_val = "48C/4T"
-            else:
-                cap_val = ""
-
-            first_idx = group.index[0]
-            df.at[first_idx, "Line"] = letter
-            df.at[first_idx, "Capacity"] = cap_val
+            for j, idx in enumerate(group.index, start=1):
+                df.at[idx, "FAT Port"] = j
 
         progress.empty()
         st.success("✅ Selesai!")
