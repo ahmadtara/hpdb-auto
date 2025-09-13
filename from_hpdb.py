@@ -222,7 +222,7 @@ def run_hpdb(HERE_API_KEY):
             fc = fatcodes[0]
             letter = fc[0] if fc and fc[0] in "ABCD" else ""
             try:
-                nums = [int(fc[1:]) for fc in fatcodes if len(fc) >= 2]
+                nums = [int(x[1:]) for x in fatcodes if len(x) >= 2]
                 max_num = max(nums) if nums else 0
             except:
                 max_num = 0
@@ -240,27 +240,39 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING PER FAT ID (dua-dua) ======
-        for fat_id, group in df.groupby("FAT ID", sort=False):
-            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-                continue
+        # ====== COPY MAPPING PER FAT ID (dua-dua) - BERDASARKAN FAT PORT ======
+        # Logic: mapping index = ceil(FAT Port / 2) - 1  -> (fat_port - 1) // 2
+        if len(mapping_df) > 0:
+            for fat_id, group in df.groupby("FAT ID", sort=False):
+                if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+                    continue
 
-            mapping_idx = 0
-            row_map = mapping_df.iloc[mapping_idx]
+                for idx in group.index:
+                    # Ambil FAT Port (harus sudah terisi)
+                    try:
+                        fat_port_val = df.at[idx, "FAT Port"]
+                        fat_port = int(fat_port_val)
+                        if fat_port < 1:
+                            raise ValueError
+                    except Exception:
+                        # fallback: gunakan urutan di group (1-based)
+                        pos_in_group = list(group.index).index(idx) + 1
+                        fat_port = pos_in_group
 
-            for i, idx in enumerate(group.index, start=1):
-                df.at[idx, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
-                df.at[idx, "FDT Port"] = row_map["FDT Port"]
-                df.at[idx, "Tube Colour"] = row_map["Tube Colour"]
-                df.at[idx, "Core Number"] = row_map["Core Number"]
-
-                if i % 2 == 0 and mapping_idx + 1 < len(mapping_df):
-                    mapping_idx += 1
+                    # mapping index: setiap 2 port -> 1 mapping row
+                    mapping_idx = (fat_port - 1) // 2
+                    # jika mapping index melebihi mapping_df, pakai baris terakhir
+                    mapping_idx = min(mapping_idx, len(mapping_df) - 1)
                     row_map = mapping_df.iloc[mapping_idx]
+
+                    df.at[idx, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
+                    df.at[idx, "FDT Port"] = row_map["FDT Port"]
+                    df.at[idx, "Tube Colour"] = row_map["Tube Colour"]
+                    df.at[idx, "Core Number"] = row_map["Core Number"]
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(10))
+        st.dataframe(df.head(20))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
