@@ -29,6 +29,39 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     def extract_placemarks(kmz_bytes):
+        def recurse_folder(folder, ns, path=""):
+            items = []
+            name_el = folder.find("kml:name", ns)
+            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
+            new_path = f"{path}/{folder_name}" if path else folder_name
+            for sub in folder.findall("kml:Folder", ns):
+                items += recurse_folder(sub, ns, new_path)
+            for pm in folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                coord = pm.find(".//kml:coordinates", ns)
+                if nm is not None and coord is not None:
+                    lon, lat = coord.text.strip().split(",")[:2]
+                    items.append({
+                        "name": nm.text.strip(),
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "path": new_path
+                    })
+            return items
+
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+            root = ET.parse(z.open(f)).getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+            all_pm = []
+            for folder in root.findall(".//kml:Folder", ns):
+                all_pm += recurse_folder(folder, ns)
+            data = {k: [] for k in ["FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "FDT", "HP COVER"]}
+            for p in all_pm:
+                for k in data:
+                    if k in p["path"]:
+                        data[k].append(p)
+                        break
             return data
 
     def extract_fatcode(path):
