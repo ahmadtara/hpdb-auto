@@ -247,19 +247,20 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Capacity"] = cap_val
 
         # ====== COPY MAPPING KE HOMEASS (per 2 baris FAT Port) ======
+                # ====== COPY MAPPING KE HOMEASS (per FAT ID, bukan per 2 baris) ======
         mapping_idx = 0
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            for i, idx in enumerate(group.index, start=1):
-                if i % 2 == 1 and mapping_idx < len(mapping_df):
-                    row_map = mapping_df.iloc[mapping_idx]
+            if mapping_idx >= len(mapping_df):
+                break  # kalau mapping habis, stop
+            row_map = mapping_df.iloc[mapping_idx]
+            for idx in group.index:
                 df.at[idx, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
                 df.at[idx, "FDT Port"] = row_map["FDT Port"]
                 df.at[idx, "Tube Colour"] = row_map["Tube Colour"]
                 df.at[idx, "Core Number"] = row_map["Core Number"]
-                if i % 2 == 0:
-                    mapping_idx += 1
+            mapping_idx += 1
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -267,3 +268,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
