@@ -238,55 +238,76 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== AUTO FILL FDT Tray, FDT Port, Tube Colour (angka), Core Number ======
-        # Pola yang dipakai berdasar database contohmu:
-        # - 2 FAT Port -> 1 FDT Port (jadi tiap 2 baris homepass = 1 FDT Port)
-        # - 1 tray = 10 FDT Port
-        # - 1 tube = 5 FDT Port (=> 10 core per tube), tube number increment per 5 ports in tray
+        # ====== AUTO FILL FDT Tray, FDT Port, Tube Colour (angka), Core Number ====
+        # Pola persis berdasarkan database (foto ketiga):
+        # - 2 FAT Port -> 1 FDT Port (FDT Port = ceil(FAT Port/2))
+        # - 1 TRAY = 10 FDT Port (port 1..10)
+        # - Dalam tray: ports 1-5 => tube slot 1 ; ports 6-10 => tube slot 2
+        # - Tube numbering pattern (sesuai foto):
+        #     -> tray odd  : tube numbers 1 & 2
+        #     -> tray even : tube numbers 3 & 4
+        #   (pattern ini berulang)
+        # - Core number di dalam tube: tiap FDT Port punya 2 core: port1->cores1&2, port2->3&4, ... sampai 10
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            # Process rows in the order they appear in df (group is already ordered)
-            for local_pos, idx in enumerate(group.index, start=1):
-                # gunakan FAT Port jika ada (lebih aman), fallback ke local_pos
+
+            # process each row (row = satu FAT Port)
+            for idx in group.index:
+                # Ambil FAT Port yang sudah diisi sebelumnya
+                fat_port_raw = df.at[idx, "FAT Port"]
                 try:
-                    fat_port_val = int(group.loc[idx, "FAT Port"])
+                    fat_port_val = int(fat_port_raw)
                 except Exception:
+                    # fallback: gunakan posisi dalam group (1-based)
+                    local_pos = list(group.index).index(idx) + 1
                     fat_port_val = local_pos
 
-                # FDT Port number (ceil of fat_port/2)
+                # FDT Port = ceil(FAT Port / 2)
                 fdt_port_num = (fat_port_val + 1) // 2
 
-                # Tray number (1-based), tiap 10 FDT Port => 1 tray
+                # Tray number (1-based), setiap 10 FDT Port = 1 tray
                 tray_num = (fdt_port_num - 1) // 10 + 1
 
-                # Port number di dalam tray (1..10)
+                # Port number IN TRAY (1..10)
                 port_in_tray = ((fdt_port_num - 1) % 10) + 1
 
-                # Tube index in tray: ports 1-5 => tube slot 1, ports 6-10 => tube slot 2
-                tube_slot_in_tray = ( (port_in_tray - 1) // 5 ) + 1  # 1 or 2
+                # Tube slot in tray (1 or 2)
+                tube_slot_in_tray = ((port_in_tray - 1) // 5) + 1  # 1 or 2
 
-                # Tube global number (angka) sesuai contoh:
-                # tray1 => tubes 1 & 2, tray2 => tubes 3 & 4, dst
-                tube_number = (tray_num - 1) * 2 + tube_slot_in_tray
+                # Tube numbering PATTERN per foto:
+                # tray odd -> tube numbers 1 & 2
+                # tray even -> tube numbers 3 & 4
+                if tray_num % 2 == 1:
+                    tube_number = tube_slot_in_tray  # 1 or 2
+                else:
+                    tube_number = 2 + tube_slot_in_tray  # 3 or 4
 
-                # Core number within tube (1..10): setiap FDT Port punya 2 core (port1 -> cores 1&2, port2 -> 3&4, ...)
-                # compute base = (port_in_tray_in_same_tube - 1) * 2 + offset
-                # port position inside the tube (1..5)
+                # Port position inside tube (1..5)
                 port_pos_in_tube = ((port_in_tray - 1) % 5) + 1
-                # if fat_port_val is odd => first core of the port (1), else second core (2)
+
+                # offset in port: odd FAT Port -> first core of the port, even FAT Port -> second core
                 offset_in_port = 1 if (fat_port_val % 2 == 1) else 2
+
+                # Core number within tube (1..10)
                 core_number = (port_pos_in_tube - 1) * 2 + offset_in_port
 
-                # Tulis ke dataframe. Sesuaikan format 'TRAY-1' kalau mau string, sekarang saya pakai 'TRAY-{n}'
-                df.at[idx, "FDT Tray (Front)"] = f"TRAY-{tray_num}"
-                df.at[idx, "FDT Port"] = port_in_tray
-                df.at[idx, "Tube Colour"] = tube_number   # angka sesuai permintaan
-                df.at[idx, "Core Number"] = core_number
+                # Write Tube Colour (angka) and Core Number for every FAT Port row
+                df.at[idx, "Tube Colour"] = int(tube_number)
+                df.at[idx, "Core Number"] = int(core_number)
+
+                # Only write FDT Tray & FDT Port on the FIRST row of the pair (i.e., when FAT Port is odd)
+                if fat_port_val % 2 == 1:
+                    df.at[idx, "FDT Tray (Front)"] = int(tray_num)
+                    df.at[idx, "FDT Port"] = int(port_in_tray)
+                else:
+                    # keep blank for second row of the pair
+                    df.at[idx, "FDT Tray (Front)"] = ""
+                    df.at[idx, "FDT Port"] = ""
 
         progress.empty()
         st.success("✅ Selesai!")
-        st.dataframe(df.head(20))
+        st.dataframe(df.head(40))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
