@@ -27,7 +27,7 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # ------------------------------
-    # Extract placemarks
+    # Extract placemarks dari KMZ
     # ------------------------------
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
@@ -162,6 +162,7 @@ def run_hpdb(HERE_API_KEY):
             if col not in df.columns:
                 df[col] = ""
 
+        # --- Isi data dasar dari placemarks
         for i, h in enumerate(hp):
             if i >= len(df):
                 break
@@ -212,7 +213,7 @@ def run_hpdb(HERE_API_KEY):
             for i, idx in enumerate(group.index, start=1):
                 df.at[idx, "FAT Port"] = i
 
-        # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
+        # ====== AUTO FILL LINE & CAPACITY ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
@@ -240,52 +241,41 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING PER FAT ID (2-2 ANCHORED ON ROWS WITH 'Line') ======
-        # Logic:
-        # - Untuk tiap FAT ID, cari baris yang memiliki value di kolom 'Line'
-        # - Setiap baris 'Line' act as anchor: mapping row ke-0 -> diaplikasikan ke anchor + baris berikutnya (2 baris)
-        # - Lanjutkan ke mapping row berikutnya untuk anchor selanjutnya
-        # ====== COPY MAPPING PER FAT ID (pola 2-2 mulai dari baris pertama yg punya 'Line') ======
+        # ====== COPY MAPPING pola 2-2 per FAT ======
+        def is_filled(val):
+            return not (pd.isna(val) or str(val).strip() == "")
 
-def is_filled(val):
-    return not (pd.isna(val) or str(val).strip() == "")
+        if len(mapping_df) > 0:
+            for fat_id, group in df.groupby("FAT ID", sort=False):
+                if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+                    continue
 
-if len(mapping_df) > 0:
-    for fat_id, group in df.groupby("FAT ID", sort=False):
-        if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-            continue
+                rows = list(group.index)
+                if not rows:
+                    continue
 
-        rows = list(group.index)
-        if not rows:
-            continue
+                anchors = [idx for idx in rows if is_filled(df.at[idx, "Line"])]
+                start = anchors[0] if anchors else rows[0]
+                start_pos = rows.index(start)
 
-        # cari baris awal yang punya 'Line', kalau tidak ada pakai baris pertama group
-        anchors = [idx for idx in rows if is_filled(df.at[idx, "Line"])]
-        start = anchors[0] if anchors else rows[0]
-        start_pos = rows.index(start)
+                mapping_idx = 0
+                pos = start_pos
+                while pos < len(rows):
+                    row_map = mapping_df.iloc[min(mapping_idx, len(mapping_df) - 1)]
 
-        mapping_idx = 0
-        pos = start_pos
+                    df.at[rows[pos], "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
+                    df.at[rows[pos], "FDT Port"] = row_map["FDT Port"]
+                    df.at[rows[pos], "Tube Colour"] = row_map["Tube Colour"]
+                    df.at[rows[pos], "Core Number"] = row_map["Core Number"]
 
-        while pos < len(rows):
-            row_map = mapping_df.iloc[min(mapping_idx, len(mapping_df) - 1)]
+                    if pos + 1 < len(rows):
+                        df.at[rows[pos + 1], "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
+                        df.at[rows[pos + 1], "FDT Port"] = row_map["FDT Port"]
+                        df.at[rows[pos + 1], "Tube Colour"] = row_map["Tube Colour"]
+                        df.at[rows[pos + 1], "Core Number"] = row_map["Core Number"]
 
-            # isi baris utama
-            df.at[rows[pos], "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
-            df.at[rows[pos], "FDT Port"] = row_map["FDT Port"]
-            df.at[rows[pos], "Tube Colour"] = row_map["Tube Colour"]
-            df.at[rows[pos], "Core Number"] = row_map["Core Number"]
-
-            # isi baris pasangannya (jika ada)
-            if pos + 1 < len(rows):
-                df.at[rows[pos + 1], "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
-                df.at[rows[pos + 1], "FDT Port"] = row_map["FDT Port"]
-                df.at[rows[pos + 1], "Tube Colour"] = row_map["Tube Colour"]
-                df.at[rows[pos + 1], "Core Number"] = row_map["Core Number"]
-
-            mapping_idx += 1
-            pos += 2
-
+                    mapping_idx += 1
+                    pos += 2
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -293,4 +283,3 @@ if len(mapping_df) > 0:
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
