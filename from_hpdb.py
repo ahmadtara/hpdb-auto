@@ -245,38 +245,47 @@ def run_hpdb(HERE_API_KEY):
         # - Untuk tiap FAT ID, cari baris yang memiliki value di kolom 'Line'
         # - Setiap baris 'Line' act as anchor: mapping row ke-0 -> diaplikasikan ke anchor + baris berikutnya (2 baris)
         # - Lanjutkan ke mapping row berikutnya untuk anchor selanjutnya
-        def is_filled(val):
-            return not (pd.isna(val) or str(val).strip() == "")
+        # ====== COPY MAPPING PER FAT ID (pola 2-2 mulai dari baris pertama yg punya 'Line') ======
 
-        if len(mapping_df) > 0:
-            for fat_id, group in df.groupby("FAT ID", sort=False):
-                if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-                    continue
+def is_filled(val):
+    return not (pd.isna(val) or str(val).strip() == "")
 
-                indices = list(group.index)
-                # baris anchor: baris dalam group yang mempunyai kolom 'Line' terisi
-                anchors = [idx for idx in indices if is_filled(df.at[idx, "Line"])]
+if len(mapping_df) > 0:
+    for fat_id, group in df.groupby("FAT ID", sort=False):
+        if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+            continue
 
-                mapping_idx = 0
-                for anchor in anchors:
-                    # pastikan mapping_idx dalam range
-                    mapping_idx = min(mapping_idx, len(mapping_df) - 1)
-                    row_map = mapping_df.iloc[mapping_idx]
+        rows = list(group.index)
+        if not rows:
+            continue
 
-                    # ambil posisi anchor di list indices -> supaya tahu baris berikutnya dalam FAT
-                    pos = indices.index(anchor)
-                    targets = [anchor]
-                    if pos + 1 < len(indices):
-                        targets.append(indices[pos + 1])  # baris setelah anchor
+        # cari baris awal yang punya 'Line', kalau tidak ada pakai baris pertama group
+        anchors = [idx for idx in rows if is_filled(df.at[idx, "Line"])]
+        start = anchors[0] if anchors else rows[0]
+        start_pos = rows.index(start)
 
-                    # terapkan mapping pada anchor dan baris setelahnya (jika ada)
-                    for t in targets:
-                        df.at[t, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
-                        df.at[t, "FDT Port"] = row_map["FDT Port"]
-                        df.at[t, "Tube Colour"] = row_map["Tube Colour"]
-                        df.at[t, "Core Number"] = row_map["Core Number"]
+        mapping_idx = 0
+        pos = start_pos
 
-                    mapping_idx += 1  # lanjut ke mapping row berikutnya untuk anchor selanjutnya
+        while pos < len(rows):
+            row_map = mapping_df.iloc[min(mapping_idx, len(mapping_df) - 1)]
+
+            # isi baris utama
+            df.at[rows[pos], "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
+            df.at[rows[pos], "FDT Port"] = row_map["FDT Port"]
+            df.at[rows[pos], "Tube Colour"] = row_map["Tube Colour"]
+            df.at[rows[pos], "Core Number"] = row_map["Core Number"]
+
+            # isi baris pasangannya (jika ada)
+            if pos + 1 < len(rows):
+                df.at[rows[pos + 1], "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
+                df.at[rows[pos + 1], "FDT Port"] = row_map["FDT Port"]
+                df.at[rows[pos + 1], "Tube Colour"] = row_map["Tube Colour"]
+                df.at[rows[pos + 1], "Core Number"] = row_map["Core Number"]
+
+            mapping_idx += 1
+            pos += 2
+
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -284,3 +293,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
