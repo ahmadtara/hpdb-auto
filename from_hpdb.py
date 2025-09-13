@@ -19,9 +19,10 @@ def run_hpdb(HERE_API_KEY):
 """, unsafe_allow_html=True)
 
     if st.button("🔒 Logout"):
-    st.session_state["logged_in"] = False
-    st.session_state["user"] = None
-    st.rerun()
+        st.session_state["logged_in"] = False
+        st.session_state["user"] = None
+        st.rerun()
+
 
 kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
 template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
@@ -267,3 +268,4 @@ if kmz_file and template_file:
     buf = BytesIO()
     df.to_excel(buf, index=False)
     st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
