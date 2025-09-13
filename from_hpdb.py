@@ -154,7 +154,7 @@ def run_hpdb(HERE_API_KEY):
         must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-                     "Line", "Capacity", "FAT Port"]
+                     "Line", "Capacity", "FAT Port", "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -210,7 +210,10 @@ def run_hpdb(HERE_API_KEY):
             for i, idx in enumerate(group.index, start=1):
                 df.at[idx, "FAT Port"] = i
 
-        # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
+        # ====== AUTO FILL LINE, CAPACITY, FDT Tray, Port, Tube, Core ======
+        tube_colours = ["BLUE", "ORANGE", "GREEN", "BROWN", "SLATE", "WHITE",
+                        "RED", "BLACK", "YELLOW", "VIOLET", "ROSE", "AQUA"]
+
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
@@ -227,16 +230,37 @@ def run_hpdb(HERE_API_KEY):
 
             if 1 <= max_num <= 10:
                 cap_val = "24C/2T"
+                total_core = 24
+                total_tube = 2
             elif 11 <= max_num <= 15:
                 cap_val = "36C/3T"
+                total_core = 36
+                total_tube = 3
             elif 16 <= max_num <= 20:
                 cap_val = "48C/4T"
+                total_core = 48
+                total_tube = 4
             else:
                 cap_val = ""
+                total_core = 0
+                total_tube = 0
 
             first_idx = group.index[0]
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
+
+            core_per_tube = 12 if total_tube > 0 else 0
+            for j, idx in enumerate(group.index):
+                df.at[idx, "FDT Tray (Front)"] = "TRAY-1"
+                df.at[idx, "FDT Port"] = j + 1
+                if total_core > 0:
+                    tube_idx = (j // core_per_tube) % total_tube
+                    core_idx = (j % core_per_tube) + 1
+                    df.at[idx, "Tube Colour"] = tube_colours[tube_idx % len(tube_colours)]
+                    df.at[idx, "Core Number"] = core_idx
+                else:
+                    df.at[idx, "Tube Colour"] = ""
+                    df.at[idx, "Core Number"] = ""
 
         progress.empty()
         st.success("✅ Selesai!")
