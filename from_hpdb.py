@@ -27,7 +27,7 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # ------------------------------
-    # Extract placemarks pakai lxml
+    # Extract placemarks
     # ------------------------------
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
@@ -119,10 +119,7 @@ def run_hpdb(HERE_API_KEY):
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
 
-        # baca sheet utama HPDB
         df = pd.read_excel(template_file, sheet_name="Homepass Database")
-
-        # baca mapping dari sheet yg sama
         expected_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
         mapping_df = df[expected_cols].dropna(how="all").reset_index(drop=True)
 
@@ -139,7 +136,6 @@ def run_hpdb(HERE_API_KEY):
         fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
         oltcode = "UNKNOWN"
 
-        # Cari OLT dari description FDT
         if fdt:
             with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
                 f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
@@ -157,7 +153,6 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        # pastikan kolom wajib ada
         must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
                      "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
                      "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
@@ -173,7 +168,6 @@ def run_hpdb(HERE_API_KEY):
             fc = extract_fatcode(h["path"])
             df.at[i, "fatcode"] = fc
 
-            # parsing block & homenumber
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
                 df.at[i, "block"] = name_parts[0].strip().upper()
@@ -246,22 +240,23 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING KE HOMEASS (per FAT ID) ======
-        mapping_idx = 0
+        # ====== COPY MAPPING PER FAT ID (dua-dua) ======
         for fat_id, group in df.groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            if mapping_idx >= len(mapping_df):
-                break
 
+            mapping_idx = 0
             row_map = mapping_df.iloc[mapping_idx]
-            for idx in group.index:
+
+            for i, idx in enumerate(group.index, start=1):
                 df.at[idx, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
                 df.at[idx, "FDT Port"] = row_map["FDT Port"]
                 df.at[idx, "Tube Colour"] = row_map["Tube Colour"]
                 df.at[idx, "Core Number"] = row_map["Core Number"]
 
-            mapping_idx += 1
+                if i % 2 == 0 and mapping_idx + 1 < len(mapping_df):
+                    mapping_idx += 1
+                    row_map = mapping_df.iloc[mapping_idx]
 
         progress.empty()
         st.success("✅ Selesai!")
