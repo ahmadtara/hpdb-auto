@@ -130,7 +130,6 @@ def nearest_road_angle(x, y, roads):
         for i in range(len(path) - 1):
             x1, y1 = path[i]
             x2, y2 = path[i + 1]
-            # jarak titik ke segmen garis
             px = x2 - x1
             py = y2 - y1
             norm = px*px + py*py
@@ -208,7 +207,7 @@ def draw_to_template(classified, template_path):
             elif layer_name == "CLOSURE":
                 block_name = "CLOSURE"
                 scale_x = scale_y = scale_z = 0.0030
-            elif layer_name == "COIL":
+            elif layer_name == "COIL":  # Slack Hanger
                 block_name = "COIL"
                 scale_x = scale_y = scale_z = 0.0030
 
@@ -232,16 +231,16 @@ def draw_to_template(classified, template_path):
             if not inserted_block:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
 
-            # hitung rotasi teks dari jalan terdekat
-            angle = nearest_road_angle(x, y, roads)
-            tx, ty = offset_point(x, y, angle, distance=4)
-
-            msp.add_text(obj["name"], dxfattribs={
-                "height": 5.0,
-                "layer": target_layer,
-                "insert": (tx, ty),
-                "rotation": angle
-            })
+            # tambah teks kecuali untuk Slack Hanger (COIL)
+            # if layer_name != "COIL":
+                angle = nearest_road_angle(x, y, roads)
+                tx, ty = offset_point(x, y, angle, distance=4)
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": 5.0,
+                    "layer": target_layer,
+                    "insert": (tx, ty),
+                    "rotation": angle
+                })
 
     return doc
 
