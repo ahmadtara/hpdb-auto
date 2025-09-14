@@ -14,6 +14,12 @@ target_folders = {
     'JOINT CLOSURE', 'SLACK HANGER', 'JALAN'
 }
 
+# mapping folder ➝ layer CAD
+layer_mapping = {
+    "CABLE": "FO 36 CORE",
+    "JALAN": "JALAN",
+}
+
 def extract_kmz(kmz_path, extract_dir):
     with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
         kmz_file.extractall(extract_dir)
@@ -100,7 +106,7 @@ def classify_items(items):
             classified["FDT"].append(it)
         elif folder == "NEW POLE 7-4":
             classified["NEW_POLE_74"].append(it)
-        elif folder == "NEW POLE 9-4":  # rename jadi 9-4
+        elif folder == "NEW POLE 9-4":
             classified["NEW_POLE_94"].append(it)
         elif "EXISTING POLE EMR" in folder:
             classified["EXISTING_POLE"].append(it)
@@ -117,16 +123,6 @@ def classify_items(items):
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
-
-    # cari block ref
-    matchblock_fdt = matchblock_pole = None
-    for e in msp:
-        if e.dxftype() == 'INSERT':
-            name = e.dxf.name.upper()
-            if name == "FDT":
-                matchblock_fdt = e.dxf
-            elif name.startswith("A$"):
-                matchblock_pole = e.dxf
 
     # kumpulkan koordinat
     all_xy = []
@@ -156,8 +152,11 @@ def draw_to_template(classified, template_path):
     # mapping folder ke block/layer
     for layer_name, cat_items in classified.items():
         for obj in cat_items:
+            # cek mapping ke layer lain
+            target_layer = layer_mapping.get(layer_name, layer_name)
+
             if obj['type'] == 'path':
-                msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": layer_name})
+                msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": target_layer})
                 continue
 
             x, y = obj['xy']
@@ -167,15 +166,22 @@ def draw_to_template(classified, template_path):
             if layer_name == "FDT":
                 block_name = "FDT"
                 scale_x = scale_y = scale_z = 0.0025
+
             elif layer_name == "NEW_POLE_74":
-                block_name = "A$C14dd5346"  # default pole
-            elif layer_name == "NEW_POLE_94":
-                block_name = "np9"  # custom blok
-            elif layer_name == "EXISTING_POLE":
                 block_name = "A$C14dd5346"
+
+            elif layer_name == "NEW_POLE_94":
+                block_name = "np9"
+
+            elif layer_name == "EXISTING_POLE":
+                block_name = "A$Cdb6fd7d1" if obj['folder'] in [
+                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
+                ] else "A$C14dd5346"
+
             elif layer_name == "CLOSURE":
                 block_name = "CLOSURE"
                 scale_x = scale_y = scale_z = 0.0030
+
             elif layer_name == "COIL":
                 block_name = "COIL"
                 scale_x = scale_y = scale_z = 0.0030
@@ -187,7 +193,7 @@ def draw_to_template(classified, template_path):
                         name=block_name,
                         insert=(x, y),
                         dxfattribs={
-                            "layer": layer_name,
+                            "layer": target_layer,
                             "xscale": scale_x,
                             "yscale": scale_y,
                             "zscale": scale_z,
@@ -198,12 +204,12 @@ def draw_to_template(classified, template_path):
                     print(f"Gagal insert block {block_name}: {e}")
 
             if not inserted_block:
-                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": layer_name})
+                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
 
             # kasih teks label
             msp.add_text(obj["name"], dxfattribs={
                 "height": 2.5,
-                "layer": layer_name,
+                "layer": target_layer,
                 "insert": (x + 2, y)
             })
 
