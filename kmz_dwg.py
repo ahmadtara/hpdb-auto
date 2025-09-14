@@ -11,7 +11,6 @@ from statistics import mean
 # ----------------------------
 # Config / Transformer
 # ----------------------------
-# Pastikan EPSG sesuai kebutuhan; ini menggunakan WGS84 -> UTM zone 60S (EPSG:32760) seperti di kode awal
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 target_folders = {
@@ -136,7 +135,6 @@ def segment_angle_xy(p1, p2):
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
     ang = math.degrees(math.atan2(dy, dx))
-    # normalize to (-180,180]
     if ang <= -180:
         ang += 360
     if ang > 180:
@@ -162,7 +160,6 @@ def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len
     px, py = pt_xy
     best_dist = float("inf")
     best_angle = None
-    # first pass: segments with length >= min_seg_len
     for i in range(len(coords) - 1):
         p1, p2 = coords[i], coords[i+1]
         seg = LineString([p1, p2])
@@ -175,7 +172,6 @@ def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len
             best_angle = segment_angle_xy(p1, p2)
     if best_angle is not None:
         return best_angle
-    # fallback: any segment
     best_dist = float("inf")
     for i in range(len(coords) - 1):
         p1, p2 = coords[i], coords[i+1]
@@ -233,7 +229,6 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0):
-    # load template if ada
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
     else:
@@ -243,20 +238,16 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     # --- detect block references ---
     matchblock_fat = matchblock_fdt = matchblock_pole = None
 
-    # cek di modelspace (INSERT entities)
+    # cek di modelspace
     for e in msp:
-        try:
-            if e.dxftype() == "INSERT":
-                name = e.dxf.name.upper()
-                if "FAT" in name:
-                    matchblock_fat = e
-                elif "FDT" in name:
-                    matchblock_fdt = e
-                elif "POLE" in name or name.startswith("A$"):
-                    matchblock_pole = e
-        except Exception:
-            # Some entities may not have dxf attr accessible; ignore
-            continue
+        if e.dxftype() == "INSERT":
+            name = e.dxf.name.upper()
+            if "FAT" in name:
+                matchblock_fat = e
+            elif "FDT" in name:
+                matchblock_fdt = e
+            elif "POLE" in name or name.startswith("A$"):
+                matchblock_pole = e
 
     # cek juga di block definition
     for b in doc.blocks:
@@ -268,7 +259,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         if not matchblock_pole and "POLE" in bname:
             matchblock_pole = b
 
-    # shift coords (centering)
+    # shift coords
     all_xy = []
     for _, cat_items in classified.items():
         for obj in cat_items:
@@ -288,7 +279,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             elif obj['type'] == 'path':
                 obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]; idx += len(obj['coords'])
 
-    # layer mapping (sesuaikan bila perlu)
+    # mapping
     layer_mapping = {
         "BOUNDARY": "FAT AREA",
         "DISTRIBUTION_CABLE": "FO 36 CORE",
@@ -297,10 +288,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         "JALAN": "JALAN"
     }
 
-    # build cables (line strings)
     cables = build_cable_lines(classified)
-
-    # prepare HP items for rotation grouping
     hp_items = []
     for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
         if 'xy' in obj: hp_items.append({'obj': obj, 'xy': obj['xy']})
@@ -323,49 +311,32 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     best_angle = nearest_segment_angle_with_minlen(hp['xy'], c['line'], min_seg_len)
             hp['rotation'] = best_angle
 
-    # draw polylines / paths
+    # draw polylines
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
-            if obj['type'] == "path":
-                if len(obj.get('xy_path', [])) >= 2:
+            if obj['type']=="path":
+                if len(obj.get('xy_path',[]))>=2:
                     msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                elif len(obj.get('xy_path', [])) == 1:
+                elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-    # draw points (FAT/FDT/POLE and other points)
+    # draw points (FAT/FDT/POLE)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
-        # HP handled separately below
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
             continue
         for obj in cat_items:
             if obj['type'] != "point":
                 continue
             x, y = obj['xy']
-
-            # cari rotasi berdasarkan garis terdekat (cables)
-            rotation_angle = 0.0
-            try:
-                best_angle, best_dist = 0.0, float("inf")
-                for c in cables:
-                    dist = c['line'].distance(Point((x, y)))
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_angle = nearest_segment_angle_with_minlen((x, y), c['line'], min_seg_len)
-                rotation_angle = best_angle
-            except Exception:
-                rotation_angle = 0.0
-
-            # tentukan block name (jika ada di template)
             block_name = None
             if layer_name == "FAT" and matchblock_fat:
-                # matchblock_fat bisa berupa INSERT entity atau BlockRecord; ambil nama dengan aman
-                block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else getattr(matchblock_fat, "name", None)
+                block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
             elif layer_name == "FDT" and matchblock_fdt:
-                block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else getattr(matchblock_fdt, "name", None)
+                block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
             elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
-                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else getattr(matchblock_pole, "name", None)
+                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
 
             if block_name:
                 try:
@@ -377,56 +348,40 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     elif "POLE" in layer_name:
                         scale = 1.0
 
-                    # insert blockref with rotation
                     msp.add_blockref(
                         block_name, (x, y),
                         dxfattribs={
                             "layer": true_layer,
                             "xscale": scale,
                             "yscale": scale,
-                            "zscale": scale,
-                            "rotation": rotation_angle
+                            "zscale": scale
                         }
                     )
                 except Exception as e:
                     st.warning(f"Gagal insert block {block_name}: {e}")
-                    # fallback: draw circle
-                    msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
             else:
-                # jika tidak ada block, representasi sederhana
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
-            # teks selalu ditambahkan dan ikut rotasi
+            # --- teks SELALU ditambahkan ---
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
-            try:
-                msp.add_text(
-                    obj.get("name", ""),
-                    dxfattribs={
-                        "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
-                        "layer": text_layer,
-                        "color": 1 if text_layer == "FEATURE_LABEL" else 256,
-                        "insert": (x + 2, y),
-                        "rotation": rotation_angle
-                    }
-                )
-            except Exception:
-                # some dxf versions might require different args; ignore text failure but warn
-                st.warning(f"Gagal menambahkan teks pada {obj.get('name','')} di layer {text_layer}")
+            msp.add_text(
+                obj.get("name", ""),
+                dxfattribs={
+                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
+                    "layer": text_layer,
+                    "color": 1 if text_layer == "FEATURE_LABEL" else 256,
+                    "insert": (x + 2, y)
+                }
+            )
 
-    # draw HP (with precomputed rotations)
+    # draw HP
     for hp in hp_items:
-        x, y = hp['xy']
-        rot = hp.get('rotation', 0.0)
-        name = hp['obj'].get("name", "")
-        try:
-            if "HP COVER" in hp['obj']['folder']:
-                msp.add_text(name, dxfattribs={"height": 6, "layer": "FEATURE_LABEL", "color": 6, "insert": (x, y), "rotation": rot})
-            else:
-                msp.add_text(name, dxfattribs={"height": 3, "layer": "FEATURE_LABEL", "color": 7, "insert": (x, y), "rotation": rot})
-        except Exception:
-            st.warning(f"Gagal menambahkan teks HP: {name}")
+        x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
+        if "HP COVER" in hp['obj']['folder']:
+            msp.add_text(name,dxfattribs={"height":6,"layer":"FEATURE_LABEL","color":6,"insert":(x,y),"rotation":rot})
+        else:
+            msp.add_text(name,dxfattribs={"height":3,"layer":"FEATURE_LABEL","color":7,"insert":(x,y),"rotation":rot})
 
-    # simpan dxf
     doc.saveas(output_path)
     return output_path
 
@@ -434,44 +389,34 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 # Streamlit UI
 # ----------------------------
 def run_kmz_to_dwg():
-    st.title("🏗️ KMZ → AUTOCAD (Smart HP + Block Rotation)")
-    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
-    uploaded_template = st.file_uploader("📀 Upload Template DXF (optional)", type=["dxf"])
+    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation + block insertion)")
+    uploaded_kmz=st.file_uploader("📂 Upload File KMZ",type=["kmz"])
+    uploaded_template=st.file_uploader("📀 Upload Template DXF (optional)",type=["dxf"])
     st.sidebar.header("Rotation parameters")
-    min_seg_len = st.sidebar.slider("Min seg length (m)", 5.0, 100.0, 15.0, 1.0)
-    max_gap_along = st.sidebar.slider("Max gap along (m)", 5.0, 200.0, 20.0, 1.0)
+    min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
+    max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
 
     if uploaded_kmz:
-        extract_dir = "temp_kmz"
-        os.makedirs(extract_dir, exist_ok=True)
-        # simpan upload sementara
-        with open("temp_upload.kmz", "wb") as f:
-            f.write(uploaded_kmz.read())
-        kml_path = extract_kmz("temp_upload.kmz", extract_dir)
-        items = parse_kml(kml_path)
-        classified = classify_items(items)
-
-        template_path = "template_ref.dxf"
+        extract_dir="temp_kmz";os.makedirs(extract_dir,exist_ok=True)
+        with open("temp_upload.kmz","wb") as f: f.write(uploaded_kmz.read())
+        kml_path=extract_kmz("temp_upload.kmz",extract_dir)
+        items=parse_kml(kml_path);classified=classify_items(items)
+        template_path="template_ref.dxf"
         if uploaded_template:
-            with open(template_path, "wb") as f:
-                f.write(uploaded_template.read())
+            with open(template_path,"wb") as f: f.write(uploaded_template.read())
         else:
-            # gunakan template jika ada di working dir
-            template_path = template_path if os.path.exists(template_path) else ""
-
-        output_dxf = "converted_output.dxf"
+            template_path=template_path if os.path.exists(template_path) else ""
+        output_dxf="converted_output.dxf"
         try:
-            result = build_dxf_with_smart_hp(classified, template_path, output_dxf,
-                                            min_seg_len=min_seg_len, max_gap_along=max_gap_along)
+            result=build_dxf_with_smart_hp(classified,template_path,output_dxf,
+                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along)
             if result and os.path.exists(result):
                 st.success("✅ DXF berhasil dibuat.")
-                with open(result, "rb") as f:
-                    st.download_button("⬇️ Download DXF", f, file_name=os.path.basename(result))
-            else:
-                st.error("❌ Gagal membuat DXF.")
+                with open(result,"rb") as f:
+                    st.download_button("⬇️ Download DXF",f,file_name=os.path.basename(result))
+            else: st.error("❌ Gagal membuat DXF.")
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
-if __name__ == "__main__":
+if __name__=="__main__":
     run_kmz_to_dwg()
-
