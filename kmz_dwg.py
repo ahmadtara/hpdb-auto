@@ -126,41 +126,41 @@ def segment_angle(p1, p2):
     dy = p2[1] - p1[1]
     return math.degrees(math.atan2(dy, dx))
 
-def longest_segment_angle(coords):
-    max_len = 0
-    angle = 0
-    for i in range(len(coords) - 1):
-        x1, y1 = coords[i]
-        x2, y2 = coords[i + 1]
-        seg_len = math.hypot(x2 - x1, y2 - y1)
-        if seg_len > max_len:
-            max_len = seg_len
-            angle = segment_angle((x1, y1), (x2, y2))
-    return angle
+def nearest_cable_angle(pt, cables):
+    """
+    Cari sudut segmen kabel terdekat dari titik HP
+    """
+    point = Point(pt)
+    nearest_angle = 0.0
+    min_dist = float("inf")
 
-def cluster_hp_rotation(hp_points, homepass_lines, cables):
-    if not hp_points:
-        return {}
-    # Cari arah utama (longest segment dari polyline terdekat)
-    base_angle = None
-    if homepass_lines:
-        base_line = max(homepass_lines, key=lambda l: l.length)
-        base_angle = longest_segment_angle(list(base_line.coords))
-    elif cables:
-        base_line = max([LineString(c['xy_path']) for c in cables if 'xy_path' in c], key=lambda l: l.length)
-        base_angle = longest_segment_angle(list(base_line.coords))
-    else:
-        base_angle = 0.0
-    # Semua HP di cluster pakai base_angle yang sama
-    return {id(pt): base_angle for pt in hp_points}
+    for cable in cables:
+        if "xy_path" not in cable or len(cable["xy_path"]) < 2:
+            continue
+        line = LineString(cable["xy_path"])
+        proj = line.interpolate(line.project(point))
+        nearest_seg = None
+        nearest_seg_dist = float("inf")
+
+        for i in range(len(cable["xy_path"]) - 1):
+            seg_line = LineString([cable["xy_path"][i], cable["xy_path"][i + 1]])
+            dist = seg_line.distance(point)
+            if dist < nearest_seg_dist:
+                nearest_seg_dist = dist
+                nearest_seg = seg_line
+
+        if nearest_seg and nearest_seg_dist < min_dist:
+            min_dist = nearest_seg_dist
+            nearest_angle = segment_angle(nearest_seg.coords[0], nearest_seg.coords[1])
+
+    return nearest_angle
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
 
-    # --- Kumpulkan semua koordinat ---
     all_xy = []
-    for layer_name, cat_items in classified.items():
+    for _, cat_items in classified.items():
         for obj in cat_items:
             if obj['type'] == 'point':
                 all_xy.append(latlon_to_xy(obj['latitude'], obj['longitude']))
@@ -171,9 +171,9 @@ def draw_to_template(classified, template_path):
         st.error("❌ Tidak ada data dari KMZ!")
         return None
 
-    shifted_all, (cx, cy) = apply_offset(all_xy)
+    shifted_all, _ = apply_offset(all_xy)
     idx = 0
-    for layer_name, cat_items in classified.items():
+    for _, cat_items in classified.items():
         for obj in cat_items:
             if obj['type'] == 'point':
                 obj['xy'] = shifted_all[idx]
@@ -190,16 +190,9 @@ def draw_to_template(classified, template_path):
         "JALAN": "JALAN"
     }
 
-    homepass_lines = []
-    for obj in classified.get("KOTAK", []):
-        if obj['type'] == 'path' and len(obj['xy_path']) >= 2:
-            homepass_lines.append(LineString(obj['xy_path']))
-
     cables = classified.get("DISTRIBUTION_CABLE", [])
-    hp_points = classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", [])
-    rotation_map = cluster_hp_rotation(hp_points, homepass_lines, cables)
 
-    # --- Gambar objek ---
+    # --- Gambar semua ---
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
@@ -211,7 +204,9 @@ def draw_to_template(classified, template_path):
                 continue
 
             x, y = obj['xy']
-            rotation = rotation_map.get(id(obj), 0.0)
+            rotation = 0.0
+            if layer_name in ["HP_COVER", "HP_UNCOVER"]:
+                rotation = nearest_cable_angle((x, y), cables)
 
             if layer_name == "HP_COVER":
                 msp.add_text(obj["name"], dxfattribs={
@@ -221,8 +216,6 @@ def draw_to_template(classified, template_path):
                     "insert": (x, y),
                     "rotation": rotation
                 })
-                continue
-
             elif layer_name == "HP_UNCOVER":
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 3.0,
@@ -231,16 +224,14 @@ def draw_to_template(classified, template_path):
                     "insert": (x, y),
                     "rotation": rotation
                 })
-                continue
-
-            # fallback lain untuk FAT/FDT/POLE
-            msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-            msp.add_text(obj["name"], dxfattribs={
-                "height": 3.0,
-                "layer": "FEATURE_LABEL",
-                "color": 1,
-                "insert": (x + 2, y)
-            })
+            else:
+                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+                msp.add_text(obj["name"], dxfattribs={
+                    "height": 3.0,
+                    "layer": "FEATURE_LABEL",
+                    "color": 1,
+                    "insert": (x + 2, y)
+                })
 
     return doc
 
