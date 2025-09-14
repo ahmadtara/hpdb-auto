@@ -4,6 +4,7 @@ import os
 from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
+import math
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
@@ -120,6 +121,35 @@ def classify_items(items):
             classified["JALAN"].append(it)
     return classified
 
+# cari sudut jalan terdekat untuk rotasi teks
+def nearest_road_angle(x, y, roads):
+    min_dist = float("inf")
+    best_angle = 0
+    for road in roads:
+        path = road.get("xy_path", [])
+        for i in range(len(path) - 1):
+            x1, y1 = path[i]
+            x2, y2 = path[i + 1]
+            # jarak titik ke segmen garis
+            px = x2 - x1
+            py = y2 - y1
+            norm = px*px + py*py
+            if norm == 0:
+                continue
+            u = max(0, min(1, ((x - x1) * px + (y - y1) * py) / norm))
+            dx = x1 + u * px - x
+            dy = y1 + u * py - y
+            dist = dx*dx + dy*dy
+            if dist < min_dist:
+                min_dist = dist
+                best_angle = math.degrees(math.atan2(py, px))
+    return best_angle
+
+# geser posisi teks supaya gak nabrak
+def offset_point(x, y, angle, distance=3):
+    rad = math.radians(angle + 90)  # geser tegak lurus
+    return (x + distance * math.cos(rad), y + distance * math.sin(rad))
+
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
@@ -149,10 +179,11 @@ def draw_to_template(classified, template_path):
                 obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
                 idx += len(obj['coords'])
 
+    roads = classified.get("JALAN", [])
+
     # mapping folder ke block/layer
     for layer_name, cat_items in classified.items():
         for obj in cat_items:
-            # cek mapping ke layer lain
             target_layer = layer_mapping.get(layer_name, layer_name)
 
             if obj['type'] == 'path':
@@ -166,22 +197,17 @@ def draw_to_template(classified, template_path):
             if layer_name == "FDT":
                 block_name = "FDT"
                 scale_x = scale_y = scale_z = 0.0025
-
             elif layer_name == "NEW_POLE_74":
                 block_name = "A$C14dd5346"
-
             elif layer_name == "NEW_POLE_94":
                 block_name = "np9"
-
             elif layer_name == "EXISTING_POLE":
                 block_name = "A$Cdb6fd7d1" if obj['folder'] in [
                     "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
                 ] else "A$C14dd5346"
-
             elif layer_name == "CLOSURE":
                 block_name = "CLOSURE"
                 scale_x = scale_y = scale_z = 0.0030
-
             elif layer_name == "COIL":
                 block_name = "COIL"
                 scale_x = scale_y = scale_z = 0.0030
@@ -206,11 +232,15 @@ def draw_to_template(classified, template_path):
             if not inserted_block:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
 
-            # kasih teks label
+            # hitung rotasi teks dari jalan terdekat
+            angle = nearest_road_angle(x, y, roads)
+            tx, ty = offset_point(x, y, angle, distance=4)
+
             msp.add_text(obj["name"], dxfattribs={
                 "height": 5.0,
                 "layer": target_layer,
-                "insert": (x + 2, y)
+                "insert": (tx, ty),
+                "rotation": angle
             })
 
     return doc
