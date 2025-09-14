@@ -309,34 +309,61 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-    # draw points (FAT/FDT/POLE)
+        # draw points (FAT/FDT/POLE)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
-        if layer_name in ("HP_COVER","HP_UNCOVER"): continue
+        if layer_name in ("HP_COVER", "HP_UNCOVER"):
+            continue
         for obj in cat_items:
-            if obj['type']!="point": continue
-            x,y=obj['xy']; block_name=None
-            if layer_name=="FAT" and matchblock_fat:
+            if obj['type'] != "point":
+                continue
+            x, y = obj['xy']
+            block_name = None
+            if layer_name == "FAT" and matchblock_fat:
                 block_name = matchblock_fat.dxf.name
-            elif layer_name=="FDT" and matchblock_fdt:
+            elif layer_name == "FDT" and matchblock_fdt:
                 block_name = matchblock_fdt.dxf.name
-            elif layer_name in ["NEW_POLE","EXISTING_POLE"] and matchblock_pole:
+            elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
                 block_name = matchblock_pole.dxf.name
 
-            inserted=False
+            inserted = False
             if block_name:
                 try:
-                    msp.add_blockref(block_name,(x,y),dxfattribs={"layer":true_layer})
-                    inserted=True
-                except: inserted=False
+                    # --- scale manual ---
+                    scale = 1.0
+                    if layer_name == "FDT":
+                        scale = 0.0025
+                    elif layer_name == "FAT":
+                        scale = 0.0025
+                    elif "POLE" in layer_name:
+                        scale = 1.0
+
+                    msp.add_blockref(
+                        block_name, (x, y),
+                        dxfattribs={
+                            "layer": true_layer,
+                            "xscale": scale,
+                            "yscale": scale,
+                            "zscale": scale
+                        }
+                    )
+                    inserted = True
+                except:
+                    inserted = False
+
             if not inserted:
-                msp.add_circle(center=(x,y),radius=2,dxfattribs={"layer":true_layer})
-            if layer_name!="FDT":
-                text_layer="FEATURE_LABEL" if "POLE" in layer_name else true_layer
-                msp.add_text(obj.get("name",""),dxfattribs={
-                    "height":5.0 if layer_name in ["FDT","FAT","NEW_POLE","EXISTING_POLE"] else 1.5,
-                    "layer":text_layer,"color":1 if text_layer=="FEATURE_LABEL" else 256,
-                    "insert":(x+2,y)})
+                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+                text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
+                msp.add_text(
+                    obj.get("name", ""),
+                    dxfattribs={
+                        "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
+                        "layer": text_layer,
+                        "color": 1 if text_layer == "FEATURE_LABEL" else 256,
+                        "insert": (x + 2, y)
+                    }
+                )
+
 
     # draw HP
     for hp in hp_items:
@@ -384,3 +411,4 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
