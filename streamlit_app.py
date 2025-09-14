@@ -87,7 +87,7 @@ else:
         "KMZ → HPDB",
         "KML → Jalan",
         "KMZ → DWG",  # ✅ Tambahkan menu baru
-        "Checker KMZ vs HPDB",  # ✅ Tambahan menu baru
+        "KMZ → BOQ",  # ✅ Tambahan menu baru
         "Logout"
     ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
@@ -104,6 +104,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
