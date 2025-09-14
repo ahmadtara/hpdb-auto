@@ -199,18 +199,17 @@ def find_nearest_cable_segment(pt_xy, cables, min_seg_len=1.0):
             seg_best_dist = float("inf")
             seg_best_angle = 0.0
             seg_best_proj = None
+            # proyeksi sepanjang line (global) - kita gunakan proyeksi pada line (bukan seg)
+            proj_along = line.project(Point(px, py))
+            seg_best_proj = line.interpolate(proj_along)
+            # cari segmen terdekat (tanpa min len filter ketat, preferensi)
             for i in range(len(coords) - 1):
                 a = coords[i]; b = coords[i+1]
                 seg = LineString([a, b])
-                seg_len = seg.length
-                # tetap pakai segmen meskipun kecil; min_seg_len hanya preferensial
                 d = seg.distance(Point(px, py))
                 if d < seg_best_dist:
                     seg_best_dist = d
                     seg_best_angle = segment_angle_xy(a, b)
-                    # proyeksi jarak sepanjang line (pada cable)
-                    proj_dist_along = line.project(Point(px, py))
-                    seg_best_proj = line.interpolate(proj_dist_along)
             if seg_best_proj is None:
                 seg_best_proj = Point(px, py)
             best_dist = dist
@@ -260,13 +259,38 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
     return groups, hp_meta
 
 # ----------------------------
+# Helper bbox & collision (approx)
+# ----------------------------
+def estimate_text_bbox(cx, cy, text, height, rotation_degrees):
+    """
+    Kira-kira axis-aligned bbox (approx) untuk teks.
+    Lebih sederhana: lebar ~= len(text) * height * 0.6
+    return (xmin, ymin, xmax, ymax)
+    """
+    w = max(1.0, len(text)) * height * 0.6
+    h = height
+    # axis-aligned approx (ignore rotation to keep simple)
+    xmin = cx - w/2
+    xmax = cx + w/2
+    ymin = cy - h/2
+    ymax = cy + h/2
+    return (xmin, ymin, xmax, ymax)
+
+def bbox_overlap(a, b):
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    return not (ax2 < bx1 or bx2 < ax1 or ay2 < by1 or by2 < ay1)
+
+# ----------------------------
 # Main DXF builder
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
-                            min_seg_len=15.0, max_gap_along=20.0, text_offset=2.5):
+                            min_seg_len=15.0, max_gap_along=20.0,
+                            text_offset=2.5, collision_step=1.0, collision_attempts=6):
     """
-    text_offset: jarak (meter) kecil untuk memindahkan label ke samping (tegak lurus)
-    agar tidak persis tumpuk di atas block.
+    text_offset: jarak (meter) untuk menggeser label tegak lurus dari proyeksi kabel
+    collision_step: step perpindahan tambahan tiap percobaan (meter)
+    collision_attempts: maksimum percobaan geser untuk menghindari collision
     """
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
@@ -282,11 +306,13 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         try:
             if e.dxftype() == "INSERT":
                 name = e.dxf.name.upper()
-                if "FAT" in name:
+                if "FAT" in name and matchblock_fat is None:
                     matchblock_fat = e
-                elif "FDT" in name:
+                elif "FDT" in name and matchblock_fdt is None:
                     matchblock_fdt = e
-                elif "POLE" in name or name.startswith("A$"):
+                elif "POLE" in name and matchblock_pole is None:
+                    matchblock_pole = e
+                elif name.startswith("A$") and matchblock_pole is None:
                     matchblock_pole = e
         except Exception:
             continue
@@ -332,7 +358,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 
     cables = build_cable_lines(classified)
 
-    # HP rotation grouping (tetap seperti sebelumnya)
+    # HP rotation grouping (tetap dipisah)
     hp_items = []
     for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
         if 'xy' in obj: hp_items.append({'obj': obj, 'xy': obj['xy']})
@@ -367,6 +393,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
     # draw points (FAT/FDT/POLE) -> sekarang block + teks ROTATE mengikuti kabel
+    placed_label_bboxes = []  # simpan bbox axis-aligned dari label yang sudah ditempatkan (approx)
+
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -382,8 +410,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
             elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
                 block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
+            elif layer_name == "POLE" and matchblock_pole:
+                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
 
-            # cari kabel terdekat untuk menentukan rotasi
+            # cari kabel terdekat untuk menentukan rotasi (khusus distribution cable)
             rot_angle = 0.0
             proj_point = Point(x, y)
             if cables:
@@ -422,28 +452,58 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             if not inserted:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
-            # buat teks yang ROTATE mengikuti kabel juga
-            # letakkan di titik proyeksi ke kabel, geser sedikit tegak lurus agar tidak menimpa block
-            rad = math.radians(rot_angle)
-            # vektor tegak lurus (unit)
-            perp_x, perp_y = -math.sin(rad), math.cos(rad)
-            # geser ke sisi (positif) sedikit supaya teks tidak menindih block
-            label_x = proj_point.x + perp_x * text_offset
-            label_y = proj_point.y + perp_y * text_offset
+            # ----------------------------
+            # Tambahkan teks yang ROTATE mengikuti kabel juga (khusus untuk POLE/FAT/FDT)
+            # ----------------------------
+            label_text = obj.get("name", "")
+            # pilih tinggi teks
+            text_height = 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE", "POLE"] else 1.5
 
-            text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
+            # starting label position: titik proyeksi pada kabel
+            base_x = proj_point.x
+            base_y = proj_point.y
+
+            # perp unit vector (tegak lurus ke arah kabel)
+            rad = math.radians(rot_angle)
+            perp_x, perp_y = -math.sin(rad), math.cos(rad)
+
+            # awal offset (tegak lurus) sesuai text_offset
+            label_x = base_x + perp_x * text_offset
+            label_y = base_y + perp_y * text_offset
+
+            # collision avoidance: jika bbox overlap, geser +/- perp * (collision_step * attempt)
+            bbox = estimate_text_bbox(label_x, label_y, label_text, text_height, rot_angle)
+            attempt = 0
+            direction = 1
+            while any(bbox_overlap(bbox, other) for other in placed_label_bboxes) and attempt < collision_attempts:
+                attempt += 1
+                # berganti sisi setiap percobaan: +, -, +, -
+                direction = -direction
+                shift = (text_offset + collision_step * attempt) * direction
+                label_x = base_x + perp_x * shift
+                label_y = base_y + perp_y * shift
+                bbox = estimate_text_bbox(label_x, label_y, label_text, text_height, rot_angle)
+
+            # simpan bbox ke list (untuk cek label selanjutnya)
+            placed_label_bboxes.append(bbox)
+
+            # layer teks: pakai FEATURE_LABEL untuk pole, else gunakan true_layer
+            text_layer = "FEATURE_LABEL" if "POLE" in layer_name or layer_name in ["NEW_POLE", "EXISTING_POLE"] else true_layer
+            text_color = 1 if text_layer == "FEATURE_LABEL" else 256
+
+            # tambahkan teks (rotate mengikuti kabel)
             msp.add_text(
-                obj.get("name", ""),
+                label_text,
                 dxfattribs={
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
+                    "height": text_height,
                     "layer": text_layer,
-                    "color": 1 if text_layer == "FEATURE_LABEL" else 256,
+                    "color": text_color,
                     "insert": (label_x, label_y),
                     "rotation": rot_angle
                 }
             )
 
-    # draw HP (tetap seperti sebelumnya)
+    # draw HP (tetap seperti sebelumnya, terpisah)
     for hp in hp_items:
         x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
         if "HP COVER" in hp['obj']['folder']:
@@ -461,10 +521,12 @@ def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation + block insertion)")
     uploaded_kmz=st.file_uploader("📂 Upload File KMZ",type=["kmz"])
     uploaded_template=st.file_uploader("📀 Upload Template DXF (optional)",type=["dxf"])
-    st.sidebar.header("Rotation parameters")
+    st.sidebar.header("Rotation / Label parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
     text_offset = st.sidebar.slider("Label offset from cable (m)", 0.0, 10.0, 2.5, 0.5)
+    collision_step = st.sidebar.slider("Collision shift step (m)", 0.1, 5.0, 1.0, 0.1)
+    collision_attempts = st.sidebar.slider("Max collision attempts", 0, 12, 6, 1)
 
     if uploaded_kmz:
         extract_dir="temp_kmz";os.makedirs(extract_dir,exist_ok=True)
@@ -479,7 +541,9 @@ def run_kmz_to_dwg():
         output_dxf="converted_output.dxf"
         try:
             result=build_dxf_with_smart_hp(classified,template_path,output_dxf,
-                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along, text_offset=text_offset)
+                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along,
+                                           text_offset=text_offset, collision_step=collision_step,
+                                           collision_attempts=collision_attempts)
             if result and os.path.exists(result):
                 st.success("✅ DXF berhasil dibuat.")
                 with open(result,"rb") as f:
