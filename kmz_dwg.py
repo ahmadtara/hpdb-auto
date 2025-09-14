@@ -27,6 +27,7 @@ def extract_kmz(kmz_path, extract_dir):
         kmz_file.extractall(extract_dir)
     return os.path.join(extract_dir, "doc.kml")
 
+
 def parse_kml(kml_path):
     ns = {'kml': 'http://www.opengis.net/kml/2.2'}
     with open(kml_path, 'rb') as f:
@@ -89,14 +90,17 @@ def parse_kml(kml_path):
 # ----------------------------
 # Utilities
 # ----------------------------
+
 def latlon_to_xy(lat, lon):
     return transformer.transform(lon, lat)
+
 
 def apply_offset(points_xy):
     xs = [x for x, y in points_xy]
     ys = [y for x, y in points_xy]
     cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
     return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
+
 
 def classify_items(items):
     classified = {name: [] for name in [
@@ -131,6 +135,7 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
+
 def segment_angle_xy(p1, p2):
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
@@ -154,6 +159,7 @@ def build_cable_lines(classified):
         if len(xy) >= 2:
             cables.append({'orig': item, 'xy_path': xy, 'line': LineString(xy)})
     return cables
+
 
 def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len):
     coords = list(cable_line.coords)
@@ -181,6 +187,26 @@ def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len
             best_dist = dist
             best_angle = segment_angle_xy(p1, p2)
     return best_angle if best_angle is not None else 0.0
+
+
+# ----------------------------
+# New helper: compute rotation for points (FAT / POLE)
+# ----------------------------
+def compute_point_rotation(pt_xy, cables, min_seg_len=15.0):
+    """Return angle (degrees) based on nearest distribution cable segment.
+    If no cables found, returns 0.0."""
+    if not cables:
+        return 0.0
+    best_dist = float('inf')
+    best_angle = 0.0
+    for c in cables:
+        line = c['line']
+        dist = line.distance(Point(pt_xy))
+        if dist < best_dist:
+            best_dist = dist
+            best_angle = nearest_segment_angle_with_minlen(pt_xy, line, min_seg_len)
+    return best_angle
+
 
 # ----------------------------
 # Group HP
@@ -227,6 +253,7 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # ----------------------------
 # Main DXF builder
 # ----------------------------
+
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0):
     if template_path and os.path.exists(template_path):
@@ -293,6 +320,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
         if 'xy' in obj: hp_items.append({'obj': obj, 'xy': obj['xy']})
 
+    # --- HP rotation (unchanged) ---
     groups, hp_meta = group_hp_by_cable_and_along(hp_items, cables, max_gap_along=max_gap_along)
     for g_idx, group in enumerate(groups):
         c_idx = group['cable_idx']; line = cables[c_idx]['line']
@@ -330,6 +358,13 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             if obj['type'] != "point":
                 continue
             x, y = obj['xy']
+
+            # compute rotation for FAT and POLE texts/blocks using distribution cable
+            rotate_for_layers = {"FAT", "NEW_POLE", "EXISTING_POLE", "POLE"}
+            computed_rotation = None
+            if layer_name in rotate_for_layers:
+                computed_rotation = compute_point_rotation((x, y), cables, min_seg_len=min_seg_len)
+
             block_name = None
             if layer_name == "FAT" and matchblock_fat:
                 block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
@@ -348,14 +383,19 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     elif "POLE" in layer_name:
                         scale = 1.0
 
+                    attribs = {
+                        "layer": true_layer,
+                        "xscale": scale,
+                        "yscale": scale,
+                        "zscale": scale
+                    }
+                    # add rotation to block insert only for requested layers
+                    if computed_rotation is not None:
+                        attribs["rotation"] = computed_rotation
+
                     msp.add_blockref(
                         block_name, (x, y),
-                        dxfattribs={
-                            "layer": true_layer,
-                            "xscale": scale,
-                            "yscale": scale,
-                            "zscale": scale
-                        }
+                        dxfattribs=attribs
                     )
                 except Exception as e:
                     st.warning(f"Gagal insert block {block_name}: {e}")
@@ -364,17 +404,22 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 
             # --- teks SELALU ditambahkan ---
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
+            text_attribs = {
+                "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
+                "layer": text_layer,
+                "color": 1 if text_layer == "FEATURE_LABEL" else 256,
+                "insert": (x + 2, y)
+            }
+            # add rotation to text for FAT/POLE but DO NOT affect HP
+            if computed_rotation is not None:
+                text_attribs["rotation"] = computed_rotation
+
             msp.add_text(
                 obj.get("name", ""),
-                dxfattribs={
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
-                    "layer": text_layer,
-                    "color": 1 if text_layer == "FEATURE_LABEL" else 256,
-                    "insert": (x + 2, y)
-                }
+                dxfattribs=text_attribs
             )
 
-    # draw HP
+    # draw HP (unchanged behaviour)
     for hp in hp_items:
         x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
         if "HP COVER" in hp['obj']['folder']:
