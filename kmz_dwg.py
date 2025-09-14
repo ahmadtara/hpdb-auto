@@ -6,7 +6,12 @@ import ezdxf
 from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
+from shapely.ops import nearest_points
+from statistics import mean
 
+# ----------------------------
+# Config / Transformer
+# ----------------------------
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 target_folders = {
@@ -15,9 +20,13 @@ target_folders = {
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
+# ----------------------------
+# KML / KMZ parsing
+# ----------------------------
 def extract_kmz(kmz_path, extract_dir):
     with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
         kmz_file.extractall(extract_dir)
+    # default produced file usually doc.kml
     return os.path.join(extract_dir, "doc.kml")
 
 def parse_kml(kml_path):
@@ -40,7 +49,7 @@ def parse_kml(kml_path):
             name_text = name.text.strip() if name is not None else ""
 
             point_coord = pm.find('.//kml:Point/kml:coordinates', ns)
-            if point_coord is not None:
+            if point_coord is not None and point_coord.text and point_coord.text.strip():
                 lon, lat, *_ = point_coord.text.strip().split(',')
                 items.append({
                     'type': 'point',
@@ -52,7 +61,7 @@ def parse_kml(kml_path):
                 continue
 
             line_coord = pm.find('.//kml:LineString/kml:coordinates', ns)
-            if line_coord is not None:
+            if line_coord is not None and line_coord.text and line_coord.text.strip():
                 coords = []
                 for c in line_coord.text.strip().split():
                     lon, lat, *_ = c.split(',')
@@ -66,7 +75,7 @@ def parse_kml(kml_path):
                 continue
 
             poly_coord = pm.find('.//kml:Polygon//kml:coordinates', ns)
-            if poly_coord is not None:
+            if poly_coord is not None and poly_coord.text and poly_coord.text.strip():
                 coords = []
                 for c in poly_coord.text.strip().split():
                     lon, lat, *_ = c.split(',')
@@ -79,7 +88,11 @@ def parse_kml(kml_path):
                 })
     return items
 
+# ----------------------------
+# Utilities
+# ----------------------------
 def latlon_to_xy(lat, lon):
+    # transformer.transform(longitude, latitude)
     return transformer.transform(lon, lat)
 
 def apply_offset(points_xy):
@@ -121,61 +134,144 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-def segment_angle(p1, p2):
+def segment_angle_xy(p1, p2):
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
-    return math.degrees(math.atan2(dy, dx))
+    ang = math.degrees(math.atan2(dy, dx))
+    # normalize to [-180,180)
+    if ang <= -180:
+        ang += 360
+    if ang > 180:
+        ang -= 360
+    return ang
 
-def nearest_cable_angle(pt, cables, min_seg_len=15.0):
-    """
-    Cari sudut segmen kabel terdekat dari titik HP.
-    Abaikan segmen yang terlalu pendek (< min_seg_len).
-    """
-    point = Point(pt)
-    nearest_angle = 0.0
-    min_dist = float("inf")
-
-    for cable in cables:
-        if "xy_path" not in cable or len(cable["xy_path"]) < 2:
+# ----------------------------
+# Cable helpers (work in projected XY)
+# ----------------------------
+def build_cable_lines(classified):
+    """Return list of dicts: {'orig': item, 'xy_path': [(x,y),...], 'line': LineString}"""
+    cables = []
+    for item in classified.get("DISTRIBUTION_CABLE", []):
+        if item['type'] != 'path' or not item.get('coords'):
             continue
-        for i in range(len(cable["xy_path"]) - 1):
-            p1, p2 = cable["xy_path"][i], cable["xy_path"][i + 1]
-            seg_line = LineString([p1, p2])
-            seg_len = seg_line.length
+        xy = [latlon_to_xy(lat, lon) for lat, lon in item['coords']]
+        if len(xy) >= 2:
+            cables.append({'orig': item, 'xy_path': xy, 'line': LineString(xy)})
+    return cables
 
-            if seg_len < min_seg_len:
-                continue  # skip belokan pendek
-
-            dist = seg_line.distance(point)
-            if dist < min_dist:
-                min_dist = dist
-                nearest_angle = segment_angle(p1, p2)
-
-    return nearest_angle
-
-def smooth_rotations(hp_points, threshold=25.0):
+def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len):
     """
-    Samakan rotasi HP dalam 1 deret (berdekatan).
-    Kalau beda rotasi antar tetangga terlalu jauh -> pakai rata-rata.
+    For a given cable LineString (in XY), find the nearest segment to pt_xy that has length >= min_seg_len.
+    If none found, return angle of the nearest segment regardless of length (fallback).
     """
-    if not hp_points:
-        return
+    coords = list(cable_line.coords)
+    px, py = pt_xy
+    best_dist = float("inf")
+    best_angle = None
+    # first try to find nearest segment with seg_len >= min_seg_len
+    for i in range(len(coords) - 1):
+        p1 = coords[i]
+        p2 = coords[i + 1]
+        seg = LineString([p1, p2])
+        seg_len = seg.length
+        if seg_len < min_seg_len:
+            continue
+        dist = seg.distance(Point(px, py))
+        if dist < best_dist:
+            best_dist = dist
+            best_angle = segment_angle_xy(p1, p2)
+    if best_angle is not None:
+        return best_angle
+    # fallback: nearest segment ignoring min length
+    best_dist = float("inf")
+    for i in range(len(coords) - 1):
+        p1 = coords[i]
+        p2 = coords[i + 1]
+        seg = LineString([p1, p2])
+        dist = seg.distance(Point(px, py))
+        if dist < best_dist:
+            best_dist = dist
+            best_angle = segment_angle_xy(p1, p2)
+    return best_angle if best_angle is not None else 0.0
 
-    for i in range(1, len(hp_points) - 1):
-        prev_angle = hp_points[i - 1]["rotation"]
-        curr_angle = hp_points[i]["rotation"]
-        next_angle = hp_points[i + 1]["rotation"]
+# ----------------------------
+# Group HP by projection on cable and along-distance
+# ----------------------------
+def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
+    """
+    hp_xy_list: list of dicts {'obj': original_obj, 'xy':(x,y)}
+    cables: list produced by build_cable_lines
+    Returns list of groups where each group is dict:
+      {'cable_idx': int, 'indices': [hp indices], 'along_vals': [float], 'representative_xy': (x,y)}
+    Strategy:
+      - For each HP, find nearest cable index and project onto it (line.project)
+      - For each cable, sort HP by along-distance and split into groups when gap > max_gap_along
+    """
+    # prepare structure per cable
+    per_cable_hp = {i: [] for i in range(len(cables))}
+    hp_meta = []  # store cable_idx and along
+    for idx, hp in enumerate(hp_xy_list):
+        pt = Point(hp['xy'])
+        best_c = None
+        best_dist = float("inf")
+        best_along = None
+        for c_idx, c in enumerate(cables):
+            line = c['line']
+            d = line.distance(pt)
+            if d < best_dist:
+                best_dist = d
+                best_c = c_idx
+                best_along = line.project(pt)  # distance along line (units same as projected coords)
+        if best_c is None:
+            best_c = 0
+            best_along = 0.0
+        per_cable_hp[best_c].append((idx, best_along))
+        hp_meta.append({'cable_idx': best_c, 'along': best_along, 'dist_to_cable': best_dist})
 
-        avg_angle = (prev_angle + next_angle) / 2.0
+    groups = []
+    # for each cable, sort and split
+    for c_idx, hp_list in per_cable_hp.items():
+        if not hp_list:
+            continue
+        hp_list.sort(key=lambda x: x[1])  # sort by along
+        # split into segments where gap > max_gap_along
+        current_group = [hp_list[0][0]]
+        last_along = hp_list[0][1]
+        group_alongs = [last_along]
+        for idx_along in hp_list[1:]:
+            idx_i, along_i = idx_along
+            if abs(along_i - last_along) > max_gap_along:
+                # close current
+                groups.append({
+                    'cable_idx': c_idx,
+                    'indices': current_group.copy(),
+                    'along_vals': group_alongs.copy()
+                })
+                current_group = [idx_i]
+                group_alongs = [along_i]
+            else:
+                current_group.append(idx_i)
+                group_alongs.append(along_i)
+            last_along = along_i
+        # append last
+        groups.append({
+            'cable_idx': c_idx,
+            'indices': current_group.copy(),
+            'along_vals': group_alongs.copy()
+        })
 
-        # kalau beda jauh dari tetangga, pakai rata-rata
-        if abs(curr_angle - avg_angle) > threshold:
-            hp_points[i]["rotation"] = avg_angle
+    return groups, hp_meta
 
-def draw_to_template(classified, template_path):
-    doc = ezdxf.readfile(template_path)
+# ----------------------------
+# Main DXF building + rotation assignment
+# ----------------------------
+def build_dxf_with_smart_hp(classified, template_path, output_path,
+                            min_seg_len=15.0, max_gap_along=20.0):
+    # load template to copy blocks / ensure layers, if not exists create new doc
+    doc = ezdxf.readfile(template_path) if os.path.exists(template_path) else ezdxf.new('R2010')
     msp = doc.modelspace()
 
+    # Prepare all XY coords and map them back
     all_xy = []
     for _, cat_items in classified.items():
         for obj in cat_items:
@@ -189,6 +285,8 @@ def draw_to_template(classified, template_path):
         return None
 
     shifted_all, _ = apply_offset(all_xy)
+
+    # assign shifted coords back
     idx = 0
     for _, cat_items in classified.items():
         for obj in cat_items:
@@ -199,93 +297,168 @@ def draw_to_template(classified, template_path):
                 obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
                 idx += len(obj['coords'])
 
+    # layer mapping
     layer_mapping = {
         "BOUNDARY": "FAT AREA",
-        "DISTRIBUTION_CABLE": "FO 36 CORE",  # default mapping
+        "DISTRIBUTION_CABLE": "FO 36 CORE",
         "SLING_WIRE": "STRAND UG",
         "KOTAK": "GARIS HOMEPASS",
         "JALAN": "JALAN"
     }
 
-    cables = classified.get("DISTRIBUTION_CABLE", [])
+    # build cables list (XY)
+    cables = build_cable_lines(classified)  # each has 'xy_path' and 'line'
 
-    hp_points = []
+    # prepare HP list in order of appearance (we'll map indices)
+    hp_items = []
+    for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
+        if 'xy' in obj:
+            hp_items.append({'obj': obj, 'xy': obj['xy']})
 
-    # --- Gambar semua ---
+    # group HP by cable+along and split into deret by gap along
+    groups, hp_meta = group_hp_by_cable_and_along(hp_items, cables, max_gap_along=max_gap_along)
+
+    # for each group, determine rotation:
+    # choose representative point = median along projected point, then find nearest long seg (>=min_seg_len)
+    group_rotation_map = {}  # group index -> angle
+    for g_idx, group in enumerate(groups):
+        c_idx = group['cable_idx']
+        cable = cables[c_idx]
+        line = cable['line']
+        alongs = group['along_vals']
+        # representative along: median
+        rep_along = sorted(alongs)[len(alongs)//2]
+        rep_point = line.interpolate(rep_along)
+        rep_xy = (rep_point.x, rep_point.y)
+        # try to get nearest segment angle with min length
+        angle = nearest_segment_angle_with_minlen(rep_xy, line, min_seg_len)
+        group_rotation_map[g_idx] = angle
+        # also assign rotation to each hp in group (store on hp_items by index)
+        for hp_idx in group['indices']:
+            hp_items[hp_idx]['rotation'] = angle
+            hp_items[hp_idx]['group_idx'] = g_idx
+
+    # any HP not assigned (edge case) -> fallback individually
+    for idx_i, hp in enumerate(hp_items):
+        if 'rotation' not in hp:
+            # find nearest cable and segment angle fallback
+            best_angle = 0.0
+            best_dist = float("inf")
+            for c in cables:
+                line = c['line']
+                dist = line.distance(Point(hp['xy']))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_angle = nearest_segment_angle_with_minlen(hp['xy'], line, min_seg_len)
+            hp['rotation'] = best_angle
+
+    # (Optional) smoothing across sequence: if a hp rotation differs drastically from neighbors in same cable group,
+    # replace with group rotation — but since we assign group rotation already, this is usually not necessary.
+
+    # --- DRAW: first draw polylines (cables + others) ---
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
-            if obj['type'] != 'point':
-                if len(obj['xy_path']) >= 2:
+            if obj['type'] == 'path':
+                if len(obj.get('xy_path', [])) >= 2:
                     msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                elif len(obj['xy_path']) == 1:
+                elif len(obj.get('xy_path', [])) == 1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
-                continue
 
-            x, y = obj['xy']
-            rotation = 0.0
-            if layer_name in ["HP_COVER", "HP_UNCOVER"]:
-                rotation = nearest_cable_angle((x, y), cables)
-                hp_points.append({"x": x, "y": y, "rotation": rotation, "name": obj["name"], "layer": layer_name})
-            else:
+    # draw non-HP points (poles, FAT, FDT) and prepare a map for HP drawing
+    for layer_name, cat_items in classified.items():
+        true_layer = layer_mapping.get(layer_name, layer_name)
+        if layer_name in ("HP_COVER", "HP_UNCOVER"):
+            continue  # skip HP here, draw after we gathered rotations
+        for obj in cat_items:
+            if obj['type'] == 'point':
+                x, y = obj['xy']
+                # draw generic symbol (circle) and text
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-                msp.add_text(obj["name"], dxfattribs={
+                msp.add_text(obj.get("name", ""), dxfattribs={
                     "height": 3.0,
                     "layer": "FEATURE_LABEL",
                     "color": 1,
                     "insert": (x + 2, y)
                 })
 
-    # --- Samakan rotasi HP satu deret ---
-    hp_points.sort(key=lambda p: (p["x"], p["y"]))  # urutkan kira-kira per deret
-    smooth_rotations(hp_points)
-
-    # --- Gambar HP setelah dismoothing ---
-    for hp in hp_points:
-        if hp["layer"] == "HP_COVER":
-            msp.add_text(hp["name"], dxfattribs={
+    # draw HP texts with assigned rotations
+    for hp in hp_items:
+        x, y = hp['xy']
+        rot = hp.get('rotation', 0.0)
+        name = hp['obj'].get('name', '')
+        layername = hp['obj']['folder']
+        if "HP COVER" in layername:
+            msp.add_text(name, dxfattribs={
                 "height": 6,
                 "layer": "FEATURE_LABEL",
                 "color": 6,
-                "insert": (hp["x"], hp["y"]),
-                "rotation": hp["rotation"]
+                "insert": (x, y),
+                "rotation": rot
             })
-        elif hp["layer"] == "HP_UNCOVER":
-            msp.add_text(hp["name"], dxfattribs={
+        else:
+            # HP UNCOVER
+            msp.add_text(name, dxfattribs={
                 "height": 3.0,
                 "layer": "FEATURE_LABEL",
                 "color": 7,
-                "insert": (hp["x"], hp["y"]),
-                "rotation": hp["rotation"]
+                "insert": (x, y),
+                "rotation": rot
             })
 
-    return doc
+    # save
+    doc.saveas(output_path)
+    return output_path
 
+# ----------------------------
+# Streamlit UI
+# ----------------------------
 def run_kmz_to_dwg():
-    st.title("🏗️ KMZ → AUTOCAD ")
-    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
-    uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
+    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation)")
 
-    if uploaded_kmz and uploaded_template:
+    st.markdown("""
+    - Rotasi HP mengikuti DISTRIBUTION CABLE.
+    - Segmen kabel pendek (< min seg len) diabaikan agar HP di belokan kecil tidak belok sendiri.
+    - HP digroup berdasarkan proyeksi sepanjang kabel; tiap group (deret) pakai rotasi yang sama.
+    """)
+
+    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
+    uploaded_template = st.file_uploader("📀 Upload Template DXF (optional)", type=["dxf"])
+
+    st.sidebar.header("Rotation parameters")
+    min_seg_len = st.sidebar.slider("Min seg length to consider (m)", min_value=5.0, max_value=100.0, value=15.0, step=1.0)
+    max_gap_along = st.sidebar.slider("Max along-gap to split deret (m)", min_value=5.0, max_value=200.0, value=20.0, step=1.0)
+
+    if uploaded_kmz:
         extract_dir = "temp_kmz"
         os.makedirs(extract_dir, exist_ok=True)
+        with open("temp_upload.kmz", "wb") as f:
+            f.write(uploaded_kmz.read())
+        kml_path = extract_kmz("temp_upload.kmz", extract_dir)
+        items = parse_kml(kml_path)
+        classified = classify_items(items)
+
+        # compute output
+        template_path = "template_ref.dxf"
+        if uploaded_template:
+            with open(template_path, "wb") as f:
+                f.write(uploaded_template.read())
+        else:
+            # if template not provided, ensure we have something (will use new doc inside function)
+            template_path = template_path if os.path.exists(template_path) else ""
+
         output_dxf = "converted_output.dxf"
+        try:
+            result = build_dxf_with_smart_hp(classified, template_path, output_dxf,
+                                            min_seg_len=min_seg_len, max_gap_along=max_gap_along)
+            if result and os.path.exists(result):
+                st.success("✅ DXF berhasil dibuat.")
+                with open(result, "rb") as f:
+                    st.download_button("⬇️ Download DXF", f, file_name=os.path.basename(result))
+            else:
+                st.error("❌ Gagal membuat DXF.")
+        except Exception as e:
+            st.error(f"❌ Error saat memproses: {e}")
 
-        with open("template_ref.dxf", "wb") as f:
-            f.write(uploaded_template.read())
-
-        with st.spinner("🔍 Memproses data..."):
-            try:
-                kml_path = extract_kmz(uploaded_kmz, extract_dir)
-                items = parse_kml(kml_path)
-                classified = classify_items(items)
-                updated_doc = draw_to_template(classified, "template_ref.dxf")
-                if updated_doc:
-                    updated_doc.saveas(output_dxf)
-
-                if os.path.exists(output_dxf):
-                    st.success("✅ Konversi berhasil! DXF sudah dibuat.")
-                    with open(output_dxf, "rb") as f:
-                        st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
-            except Exception as e:
-                st.error(f"❌ Gagal memproses: {e}")
+if __name__ == "__main__":
+    run_kmz_to_dwg()
