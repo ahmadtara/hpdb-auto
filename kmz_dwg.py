@@ -203,9 +203,6 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
     cables: list produced by build_cable_lines
     Returns list of groups where each group is dict:
       {'cable_idx': int, 'indices': [hp indices], 'along_vals': [float], 'representative_xy': (x,y)}
-    Strategy:
-      - For each HP, find nearest cable index and project onto it (line.project)
-      - For each cable, sort HP by along-distance and split into groups when gap > max_gap_along
     """
     # prepare structure per cable
     per_cable_hp = {i: [] for i in range(len(cables))}
@@ -263,13 +260,46 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
     return groups, hp_meta
 
 # ----------------------------
-# Main DXF building + rotation assignment
+# Main DXF building + rotation assignment (with block insertion)
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0):
     # load template to copy blocks / ensure layers, if not exists create new doc
-    doc = ezdxf.readfile(template_path) if os.path.exists(template_path) else ezdxf.new('R2010')
+    if template_path and os.path.exists(template_path):
+        doc = ezdxf.readfile(template_path)
+    else:
+        doc = ezdxf.new('R2010')
     msp = doc.modelspace()
+
+    # --- try to detect sample TEXT props and INSERTs from template (for block scale/properties) ---
+    matchprop_hp = matchprop_pole = matchprop_sr = None
+    matchblock_fat = matchblock_fdt = matchblock_pole = None
+
+    try:
+        for e in msp:
+            try:
+                if e.dxftype() == 'TEXT':
+                    txt = e.dxf.text.upper()
+                    if 'NN-' in txt:
+                        matchprop_hp = e.dxf
+                    elif 'MR.SRMRW16' in txt:
+                        matchprop_pole = e.dxf
+                    elif 'SRMRW16.067.B01' in txt:
+                        matchprop_sr = e.dxf
+                elif e.dxftype() == 'INSERT':
+                    name = e.dxf.name.upper()
+                    if name == "FAT":
+                        matchblock_fat = e.dxf
+                    elif name == "FDT":
+                        matchblock_fdt = e.dxf
+                    elif name.startswith("A$"):
+                        matchblock_pole = e.dxf
+            except Exception:
+                # ignore elements that can't be read
+                continue
+    except Exception:
+        # if template has unusual structure, continue with defaults
+        pass
 
     # Prepare all XY coords and map them back
     all_xy = []
@@ -319,7 +349,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     groups, hp_meta = group_hp_by_cable_and_along(hp_items, cables, max_gap_along=max_gap_along)
 
     # for each group, determine rotation:
-    # choose representative point = median along projected point, then find nearest long seg (>=min_seg_len)
     group_rotation_map = {}  # group index -> angle
     for g_idx, group in enumerate(groups):
         c_idx = group['cable_idx']
@@ -352,9 +381,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     best_angle = nearest_segment_angle_with_minlen(hp['xy'], line, min_seg_len)
             hp['rotation'] = best_angle
 
-    # (Optional) smoothing across sequence: if a hp rotation differs drastically from neighbors in same cable group,
-    # replace with group rotation — but since we assign group rotation already, this is usually not necessary.
-
     # --- DRAW: first draw polylines (cables + others) ---
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
@@ -371,14 +397,79 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
             continue  # skip HP here, draw after we gathered rotations
         for obj in cat_items:
-            if obj['type'] == 'point':
-                x, y = obj['xy']
-                # draw generic symbol (circle) and text
+            if obj['type'] != 'point':
+                continue
+            x, y = obj['xy']
+
+            # special draw for HP handled later
+            # attempt to insert blocks for FAT / FDT / POLE / EXISTING
+            block_name = None
+            matchblock = None
+
+            if layer_name == "FAT":
+                block_name = "FAT"
+                matchblock = matchblock_fat
+            elif layer_name == "FDT":
+                block_name = "FDT"
+                matchblock = matchblock_fdt
+            elif layer_name == "NEW_POLE":
+                # If template uses specific A$... name for pole, keep that; else fallback
+                block_name = "A$C14dd5346"
+                matchblock = matchblock_pole
+            elif layer_name == "EXISTING_POLE":
+                # decide between two pole types based on original folder (preserve previous heuristic)
+                if obj['folder'] in ["EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"]:
+                    block_name = "A$Cdb6fd7d1"
+                else:
+                    block_name = "A$C14dd5346"
+                matchblock = matchblock_pole
+
+            inserted_block = False
+            if block_name:
+                try:
+                    # try to determine scales from matchblock if available
+                    scale_x = getattr(matchblock, "xscale", 1.0) if matchblock is not None else 1.0
+                    scale_y = getattr(matchblock, "yscale", 1.0) if matchblock is not None else 1.0
+                    scale_z = getattr(matchblock, "zscale", 1.0) if matchblock is not None else 1.0
+                    if layer_name == "FDT":
+                        scale_x = scale_y = scale_z = 0.0025
+                    msp.add_blockref(
+                        name=block_name,
+                        insert=(x, y),
+                        dxfattribs={
+                            "layer": true_layer,
+                            "xscale": scale_x,
+                            "yscale": scale_y,
+                            "zscale": scale_z,
+                        }
+                    )
+                    inserted_block = True
+                except Exception as e:
+                    # fallback if blockref fails (missing block definition etc.)
+                    print(f"Gagal insert block {block_name}: {e}")
+                    inserted_block = False
+
+            if not inserted_block:
+                # fallback draw circle
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+
+            # decide text layer / height / color
+            if layer_name != "FDT":
+                text_layer = "FEATURE_LABEL" if obj['folder'] in [
+                    "NEW POLE 7-3", "NEW POLE 7-4", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
+                ] else true_layer
+
+                text_color = 1 if text_layer == "FEATURE_LABEL" else 256
+
+                if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"]:
+                    text_height = 5.0
+                else:
+                    text_height = 1.5
+
                 msp.add_text(obj.get("name", ""), dxfattribs={
-                    "height": 3.0,
-                    "layer": "FEATURE_LABEL",
-                    "color": 1,
+                    "height": text_height,
+                    "layer": text_layer,
+                    "color": text_color,
                     "insert": (x + 2, y)
                 })
 
@@ -414,12 +505,12 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 # Streamlit UI
 # ----------------------------
 def run_kmz_to_dwg():
-    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation)")
-
+    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation + block insertion)")
     st.markdown("""
     - Rotasi HP mengikuti DISTRIBUTION CABLE.
     - Segmen kabel pendek (< min seg len) diabaikan agar HP di belokan kecil tidak belok sendiri.
     - HP digroup berdasarkan proyeksi sepanjang kabel; tiap group (deret) pakai rotasi yang sama.
+    - Jika template DXF mengandung block FAT / FDT / pole, script akan mencoba insert block tersebut.
     """)
 
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
@@ -432,6 +523,7 @@ def run_kmz_to_dwg():
     if uploaded_kmz:
         extract_dir = "temp_kmz"
         os.makedirs(extract_dir, exist_ok=True)
+        # write uploaded kmz to disk
         with open("temp_upload.kmz", "wb") as f:
             f.write(uploaded_kmz.read())
         kml_path = extract_kmz("temp_upload.kmz", extract_dir)
@@ -444,7 +536,6 @@ def run_kmz_to_dwg():
             with open(template_path, "wb") as f:
                 f.write(uploaded_template.read())
         else:
-            # if template not provided, ensure we have something (will use new doc inside function)
             template_path = template_path if os.path.exists(template_path) else ""
 
         output_dxf = "converted_output.dxf"
