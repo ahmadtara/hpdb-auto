@@ -243,38 +243,41 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING PER FAT ID DENGAN LOGIKA TRAY/PORT/CORE ======
-        def is_filled(val):
-            return not (pd.isna(val) or str(val).strip() == "")
+       # ====== COPY MAPPING PER FAT ID DENGAN LOGIKA TRAY/PORT/CORE ======
+for fat_id, group in df.groupby("FAT ID", sort=False):
+    if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+        continue
 
-        for fat_id, group in df.groupby("FAT ID", sort=False):
-            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-                continue
+    indices = list(group.index)
 
-            indices = list(group.index)
-            anchors = [idx for idx in indices if is_filled(df.at[idx, "Line"])]
+    tray = 1
+    port = 1
+    tube = 1
+    core = 1
 
-            tray = 1
-            port = 1
-            tube = 1
+    for idx in indices:
+        # Tray fix 1
+        df.at[idx, "FDT Tray (Front)"] = tray
+
+        # Port naik tiap 2 core
+        df.at[idx, "FDT Port"] = port
+
+        # Core number naik 1–10
+        df.at[idx, "Core Number"] = core
+
+        # Tube colour naik setelah 10 core
+        df.at[idx, "Tube Colour"] = tube
+
+        # Increment core
+        core += 1
+        if core > 10:
             core = 1
+            tube += 1
 
-            for anchor in anchors:
-                df.at[anchor, "FDT Tray (Front)"] = tray
-                df.at[anchor, "FDT Port"] = port
-                df.at[anchor, "Tube Colour"] = tube
-                df.at[anchor, "Core Number"] = core
+        # Increment port setiap 2 core
+        if core % 2 == 1:  # setelah 2 core, naik port
+            port += 1
 
-                # increment sesuai pola
-                port += 1
-                if port > 10:
-                    port = 1
-                    tray += 1
-
-                core += 1
-                if core > 10:
-                    core = 1
-                    tube += 1
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -282,3 +285,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
