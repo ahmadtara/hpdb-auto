@@ -6,7 +6,6 @@ import ezdxf
 from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
-from statistics import mean
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
@@ -128,6 +127,9 @@ def segment_angle(p1, p2):
     return math.degrees(math.atan2(dy, dx))
 
 def nearest_cable_angle(pt, cables):
+    """
+    Cari sudut segmen kabel terdekat dari titik HP
+    """
     point = Point(pt)
     nearest_angle = 0.0
     min_dist = float("inf")
@@ -136,7 +138,6 @@ def nearest_cable_angle(pt, cables):
         if "xy_path" not in cable or len(cable["xy_path"]) < 2:
             continue
         line = LineString(cable["xy_path"])
-        proj = line.interpolate(line.project(point))
         nearest_seg = None
         nearest_seg_dist = float("inf")
 
@@ -153,26 +154,41 @@ def nearest_cable_angle(pt, cables):
 
     return nearest_angle
 
-# === NEW: cluster rotasi HP ===
-def unify_hp_rotations(hp_points, cables, cluster_radius=15):
-    for hp in hp_points:
-        hp["base_rot"] = nearest_cable_angle(hp["xy"], cables)
-
-    for i, hp in enumerate(hp_points):
-        x, y = hp["xy"]
-        neighbors = []
-        for j, other in enumerate(hp_points):
-            if i == j:
+def cluster_points(points, threshold=20):
+    """
+    Cluster HP yang jaraknya dekat (<= threshold).
+    """
+    clusters = []
+    used = set()
+    for i, p in enumerate(points):
+        if i in used:
+            continue
+        cluster = [i]
+        used.add(i)
+        for j, q in enumerate(points):
+            if j in used:
                 continue
-            ox, oy = other["xy"]
-            dist = math.hypot(x - ox, y - oy)
-            if dist <= cluster_radius:
-                neighbors.append(other["base_rot"])
-        if neighbors:
-            hp["final_rot"] = mean(neighbors + [hp["base_rot"]])
-        else:
-            hp["final_rot"] = hp["base_rot"]
-    return hp_points
+            dist = math.hypot(p[0]-q[0], p[1]-q[1])
+            if dist <= threshold:
+                cluster.append(j)
+                used.add(j)
+        clusters.append(cluster)
+    return clusters
+
+def unify_hp_rotations(hp_items, cables):
+    """
+    Samakan rotasi HP dalam cluster → ikut kabel terdekat.
+    """
+    if not hp_items:
+        return
+    coords = [obj['xy'] for obj in hp_items]
+    clusters = cluster_points(coords, threshold=20)
+    for cluster in clusters:
+        rep_idx = cluster[0]
+        rep_pt = coords[rep_idx]
+        angle = nearest_cable_angle(rep_pt, cables)
+        for idx in cluster:
+            hp_items[idx]['rotation'] = angle
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
@@ -211,12 +227,9 @@ def draw_to_template(classified, template_path):
 
     cables = classified.get("DISTRIBUTION_CABLE", [])
 
-    # --- Seragamkan rotasi HP ---
-    hp_points = []
-    for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
-        if "xy" in obj:
-            hp_points.append(obj)
-    hp_points = unify_hp_rotations(hp_points, cables)
+    # --- unify rotation dulu untuk HP ---
+    unify_hp_rotations(classified["HP_COVER"], cables)
+    unify_hp_rotations(classified["HP_UNCOVER"], cables)
 
     # --- Gambar semua ---
     for layer_name, cat_items in classified.items():
@@ -230,9 +243,7 @@ def draw_to_template(classified, template_path):
                 continue
 
             x, y = obj['xy']
-            rotation = 0.0
-            if layer_name in ["HP_COVER", "HP_UNCOVER"]:
-                rotation = obj.get("final_rot", 0.0)
+            rotation = obj.get("rotation", 0.0)
 
             if layer_name == "HP_COVER":
                 msp.add_text(obj["name"], dxfattribs={
