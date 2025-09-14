@@ -99,11 +99,12 @@ else:
     elif menu == "KMZ → DWG":
         run_kmz_to_dwg()
     elif menu == "KMZ → BOQ":
-        run_kmz_vs_hpdb()
+        run_boq()
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
