@@ -240,46 +240,99 @@ def run_hpdb(HERE_API_KEY):
                 cap_val = ""
 
             first_idx = group.index[0]
-            df.at[first_idx, "Line"] = letter
+            df.at[first_idx, "Line"] = ("LINE  " + letter) if letter else ""
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== AUTO FILL FDT Tray (Front), FDT Port, Tube Colour, Core Number ======
-        for fat_id, group in df.groupby("FAT ID", sort=False):
-            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+        # ====== FINAL: ASSIGN FDT Tray, FDT Port, Tube Colour, Core Number
+        # Logic that matches contoh.xlsx exactly:
+        # - port/tray are GLOBAL (port 1..10 -> then tray++)
+        # - tube/core RESET when Line changes (tube:1..n; core 1..10)
+        # - for each FAT ID: first row (FAT Port==1) -> write Tray & Port & Tube & Core(odd)
+        #                  second row (FAT Port==2) -> write Tube & Core(even)
+        # Note: we infer Line per FAT ID by taking any non-null 'Line' in the group and if missing,
+        #       inherit previous line (same behavior as contoh).
+        import numpy as np
+
+        # Ensure FAT Port numeric
+        if "FAT Port" in df.columns:
+            df['FAT Port'] = pd.to_numeric(df['FAT Port'], errors='coerce').fillna(0).astype(int)
+
+        # Ensure FDT columns exist & cleared
+        for col in ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]:
+            if col not in df.columns:
+                df[col] = np.nan
+            else:
+                # clear previous values to avoid partial leftover
+                df[col] = np.nan
+
+        # Build FAT ID -> Line mapping (inherit previous if missing)
+        fat_line = {}
+        prev_line = None
+        for fat_id, group in df.groupby('FAT ID', sort=False):
+            nonnull_lines = group['Line'].dropna().unique()
+            if len(nonnull_lines) > 0:
+                line_val = nonnull_lines[0]
+                prev_line = line_val
+            else:
+                line_val = prev_line
+            fat_line[fat_id] = line_val
+
+        # Global port/tray counters; tube/core reset when Line changes
+        current_tray = 1
+        current_port = 1
+        current_tube = 1
+        current_core = 1
+        prev_line = None
+
+        # Process FAT IDs in appearance order
+        for fat in df['FAT ID'].drop_duplicates():
+            if not fat or fat == "FAT_NOT_FOUND":
                 continue
 
-            indices = list(group.index)
+            line = fat_line.get(fat, None)
+            # If line changed, reset tube/core but NOT tray/port (tray/port are global)
+            if line != prev_line:
+                current_tube = 1
+                current_core = 1
+                prev_line = line
 
-            tray = 1
-            port = 1
-            tube = 1
-            core = 1
+            grp = df[df['FAT ID'] == fat]
+            # pick first and second rows (prefer rows where FAT Port == 1/2)
+            if (grp['FAT Port'] == 1).any():
+                idx_first = grp.index[grp['FAT Port'] == 1][0]
+            else:
+                idx_first = grp.index[0]
+            if (grp['FAT Port'] == 2).any():
+                idx_second = grp.index[grp['FAT Port'] == 2][0]
+            else:
+                idx_second = grp.index[1] if len(grp) > 1 else None
 
-            for idx in indices:
-                # Tray fix 1
-                df.at[idx, "FDT Tray (Front)"] = tray
+            # Assign first row: Tray, Port, Tube, Core(odd)
+            df.at[idx_first, "FDT Tray (Front)"] = current_tray
+            df.at[idx_first, "FDT Port"] = current_port
+            df.at[idx_first, "Tube Colour"] = current_tube
+            df.at[idx_first, "Core Number"] = current_core
 
-                # Assign port
-                df.at[idx, "FDT Port"] = port
+            # Assign second row: Tube, Core(even) only (leave Tray/Port blank)
+            if idx_second is not None:
+                df.at[idx_second, "Tube Colour"] = current_tube
+                df.at[idx_second, "Core Number"] = current_core + 1
 
-                # Assign core
-                df.at[idx, "Core Number"] = core
+            # increment core & tube (tube increments after core wraps beyond 10)
+            current_core += 2
+            if current_core > 10:
+                current_core -= 10
+                current_tube += 1
 
-                # Assign tube
-                df.at[idx, "Tube Colour"] = tube
-
-                # === Increment rules ===
-                core += 1
-                if core > 10:  # reset core, naik tube
-                    core = 1
-                    tube += 1
-
-                if core % 2 == 1:  # setiap 2 core, naik port
-                    port += 1
+            # increment global port/tray
+            current_port += 1
+            if current_port > 10:
+                current_port = 1
+                current_tray += 1
 
         progress.empty()
-        st.success("✅ Selesai!")
-        st.dataframe(df.head(30))
+        st.success("✅ Selesai! (logika FDT Tray/Port/Tube/Core sudah disesuaikan seperti contoh.xlsx)")
+        st.dataframe(df.head(60))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
