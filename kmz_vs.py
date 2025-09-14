@@ -128,20 +128,16 @@ def run_boq():
         {"metric": "Distribution B (desc sum)", "value": dist_per_line["B"]},
         {"metric": "Distribution C (desc sum)", "value": dist_per_line["C"]},
         {"metric": "Distribution D (desc sum)", "value": dist_per_line["D"]},
-        {"metric": "Sling total (A+B+C from name)", "value": sling_total},
+        {"metric": "Sling total ", "value": sling_total},
         {"metric": "FAT total (all lines)", "value": total_fat},
         {"metric": "FAT A (count)", "value": fat_counts["A"]},
         {"metric": "FAT B (count)", "value": fat_counts["B"]},
         {"metric": "FAT C (count)", "value": fat_counts["C"]},
         {"metric": "FAT D (count)", "value": fat_counts["D"]},
         {"metric": "HP COVER total (all lines)", "value": total_hp_cover},
-        {"metric": "HP COVER A (count)", "value": hp_cover_counts["A"]},
-        {"metric": "HP COVER B (count)", "value": hp_cover_counts["B"]},
-        {"metric": "HP COVER C (count)", "value": hp_cover_counts["C"]},
-        {"metric": "HP COVER D (count)", "value": hp_cover_counts["D"]},
-        {"metric": "NEW POLE 7-4 (A/B/C)", "value": np74_count},
-        {"metric": "NEW POLE 7-3 (A/B/C)", "value": np73_count},
-        {"metric": "EXISTING POLE EMR 7-4+7-3 (A/B/C)", "value": exist_count},
+        {"metric": "NEW POLE 7-4", "value": np74_count},
+        {"metric": "NEW POLE 7-3", "value": np73_count},
+        {"metric": "EXISTING POLE EMR", "value": exist_count},
     ])
     st.table(df_summary)
 
@@ -201,3 +197,4 @@ def run_boq():
 
     st.success("✅ BOQ berhasil dibuat! (download di bawah)")
     st.download_button("📥 Download BOQ", buf.getvalue(), file_name="hasil_BOQ.xlsx")
+
