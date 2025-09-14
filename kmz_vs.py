@@ -165,11 +165,11 @@ def run_boq():
 
     # FAT total -> C30 / C31 / C32
     if 1 <= total_fat <= 24:
-        ws["C30"] = total_fat
+        ws["C30"] = 1
     elif 25 <= total_fat <= 36:
-        ws["C31"] = total_fat
+        ws["C31"] = 1
     elif 37 <= total_fat <= 48:
-        ws["C32"] = total_fat
+        ws["C32"] = 1
 
     # FAT per line -> C36..C39
     ws["C36"] = fat_counts["A"]
@@ -197,4 +197,5 @@ def run_boq():
 
     st.success("✅ BOQ berhasil dibuat! (download di bawah)")
     st.download_button("📥 Download BOQ", buf.getvalue(), file_name="hasil_BOQ.xlsx")
+
 
