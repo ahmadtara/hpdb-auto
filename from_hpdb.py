@@ -27,7 +27,7 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # ------------------------------ #
-    # Extract placemarks from KMZ    #
+    #  Extract placemarks from KMZ   #
     # ------------------------------ #
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
@@ -126,6 +126,7 @@ def run_hpdb(HERE_API_KEY):
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
+
         all_poles = (
             placemarks["NEW POLE 7-3"]
             + placemarks["EXISTING POLE EMR 7-3"]
@@ -153,11 +154,13 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
-                     "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
-                     "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-                     "Line", "Capacity", "FAT Port",
-                     "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
+        must_cols = [
+            "block", "homenumber", "fdtcode", "oltcode", "fatcode",
+            "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
+            "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
+            "Line", "Capacity", "FAT Port",
+            "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"
+        ]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -240,7 +243,7 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING (tanpa baris kedua, Tube/Core auto) ======
+        # ====== COPY MAPPING PER FAT ID DENGAN LOGIKA TRAY/PORT/CORE ======
         def is_filled(val):
             return not (pd.isna(val) or str(val).strip() == "")
 
@@ -261,6 +264,12 @@ def run_hpdb(HERE_API_KEY):
                 df.at[anchor, "FDT Port"] = port
                 df.at[anchor, "Tube Colour"] = tube
                 df.at[anchor, "Core Number"] = core
+
+                # increment sesuai pola
+                port += 1
+                if port > 10:
+                    port = 1
+                    tray += 1
 
                 core += 1
                 if core > 10:
