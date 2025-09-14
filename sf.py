@@ -232,20 +232,16 @@ def draw_to_template(classified, template_path):
             if not inserted_block:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
 
-           
-                        # hitung rotasi teks dari jalan terdekat
+            # hitung rotasi teks dari jalan terdekat
             angle = nearest_road_angle(x, y, roads)
             tx, ty = offset_point(x, y, angle, distance=4)
 
-            # tambahkan teks label, kecuali untuk SLACK HANGER (COIL)
-            if obj["name"] and layer_name != "COIL":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 5.0,
-                    "layer": target_layer,
-                    "insert": (tx, ty),
-                    "rotation": angle
-                })
-
+            msp.add_text(obj["name"], dxfattribs={
+                "height": 5.0,
+                "layer": target_layer,
+                "insert": (tx, ty),
+                "rotation": angle
+            })
 
     return doc
 
@@ -276,5 +272,3 @@ def run_sf():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
-
-UPDATE AJA KODENYA TANPA HAPUS TEKS, YANG PENTING SAYA MAU SLACK HANGER DI HAPUS NAMA NYA, KEMUDIAN POSISI DARI BLOCK FDT, POLE DAN SLACK HANGER SAMA YA
