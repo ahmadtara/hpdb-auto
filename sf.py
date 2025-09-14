@@ -9,8 +9,8 @@ transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 # hanya folder yang dipakai
 target_folders = {
-    'FDT', 'NEW POLE 7-4', 'NEW POLE 7-3', 'EXISTING POLE EMR 7-4',
-    'EXISTING POLE EMR 7-3', 'DISTRIBUTION CABLE',
+    'FDT', 'NEW POLE 7-4', 'NEW POLE 9-4', 'EXISTING POLE EMR 7-4',
+    'EXISTING POLE EMR 9-4', 'CABLE',
     'JOINT CLOSURE', 'SLACK HANGER', 'JALAN'
 }
 
@@ -100,12 +100,11 @@ def classify_items(items):
             classified["FDT"].append(it)
         elif folder == "NEW POLE 7-4":
             classified["NEW_POLE_74"].append(it)
-        elif folder == "NEW POLE 7-3":  # rename jadi 9-4
-            it['folder'] = "NEW POLE 9-4"
+        elif folder == "NEW POLE 9-4":  # rename jadi 9-4
             classified["NEW_POLE_94"].append(it)
         elif "EXISTING POLE EMR" in folder:
             classified["EXISTING_POLE"].append(it)
-        elif folder == "DISTRIBUTION CABLE":
+        elif folder == "CABLE":
             classified["CABLE"].append(it)
         elif folder == "JOINT CLOSURE":
             classified["CLOSURE"].append(it)
@@ -176,10 +175,10 @@ def draw_to_template(classified, template_path):
                 block_name = "A$C14dd5346"
             elif layer_name == "CLOSURE":
                 block_name = "CLOSURE"
-                scale_x = scale_y = scale_z = 0.0025
+                scale_x = scale_y = scale_z = 0.0030
             elif layer_name == "COIL":
                 block_name = "COIL"
-                scale_x = scale_y = scale_z = 0.0025
+                scale_x = scale_y = scale_z = 0.0030
 
             inserted_block = False
             if block_name:
