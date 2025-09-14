@@ -145,7 +145,6 @@ def segment_angle_xy(p1, p2):
 # Cable helpers
 # ----------------------------
 def build_cable_lines(classified):
-    from shapely.ops import nearest_points  # lazy import
     cables = []
     for item in classified.get("DISTRIBUTION_CABLE", []):
         if item['type'] != 'path' or not item.get('coords'):
@@ -181,6 +180,42 @@ def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len
             best_dist = dist
             best_angle = segment_angle_xy(p1, p2)
     return best_angle if best_angle is not None else 0.0
+
+def find_nearest_cable_segment(pt_xy, cables, min_seg_len=1.0):
+    """
+    Untuk titik pt_xy cari kabel terdekat, kembalikan tuple:
+    (best_cable_index, angle_degrees, projected_point (Point), distance)
+    """
+    px, py = pt_xy
+    best_dist = float("inf")
+    best_info = (None, 0.0, Point(px, py), best_dist)
+    for idx, c in enumerate(cables):
+        line = c['line']
+        # jarak dan proyeksi
+        dist = line.distance(Point(px, py))
+        if dist < best_dist:
+            # cari segmen terbaik di cable yang memperhatikan min_seg_len
+            coords = list(line.coords)
+            seg_best_dist = float("inf")
+            seg_best_angle = 0.0
+            seg_best_proj = None
+            for i in range(len(coords) - 1):
+                a = coords[i]; b = coords[i+1]
+                seg = LineString([a, b])
+                seg_len = seg.length
+                # tetap pakai segmen meskipun kecil; min_seg_len hanya preferensial
+                d = seg.distance(Point(px, py))
+                if d < seg_best_dist:
+                    seg_best_dist = d
+                    seg_best_angle = segment_angle_xy(a, b)
+                    # proyeksi jarak sepanjang line (pada cable)
+                    proj_dist_along = line.project(Point(px, py))
+                    seg_best_proj = line.interpolate(proj_dist_along)
+            if seg_best_proj is None:
+                seg_best_proj = Point(px, py)
+            best_dist = dist
+            best_info = (idx, seg_best_angle, seg_best_proj, dist)
+    return best_info  # (cable_idx, angle, projected_point, distance)
 
 # ----------------------------
 # Group HP
@@ -228,7 +263,11 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # Main DXF builder
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
-                            min_seg_len=15.0, max_gap_along=20.0):
+                            min_seg_len=15.0, max_gap_along=20.0, text_offset=2.5):
+    """
+    text_offset: jarak (meter) kecil untuk memindahkan label ke samping (tegak lurus)
+    agar tidak persis tumpuk di atas block.
+    """
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
     else:
@@ -240,14 +279,17 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 
     # cek di modelspace
     for e in msp:
-        if e.dxftype() == "INSERT":
-            name = e.dxf.name.upper()
-            if "FAT" in name:
-                matchblock_fat = e
-            elif "FDT" in name:
-                matchblock_fdt = e
-            elif "POLE" in name or name.startswith("A$"):
-                matchblock_pole = e
+        try:
+            if e.dxftype() == "INSERT":
+                name = e.dxf.name.upper()
+                if "FAT" in name:
+                    matchblock_fat = e
+                elif "FDT" in name:
+                    matchblock_fdt = e
+                elif "POLE" in name or name.startswith("A$"):
+                    matchblock_pole = e
+        except Exception:
+            continue
 
     # cek juga di block definition
     for b in doc.blocks:
@@ -289,12 +331,15 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     }
 
     cables = build_cable_lines(classified)
+
+    # HP rotation grouping (tetap seperti sebelumnya)
     hp_items = []
     for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
         if 'xy' in obj: hp_items.append({'obj': obj, 'xy': obj['xy']})
 
     groups, hp_meta = group_hp_by_cable_and_along(hp_items, cables, max_gap_along=max_gap_along)
     for g_idx, group in enumerate(groups):
+        if not cables: break
         c_idx = group['cable_idx']; line = cables[c_idx]['line']
         rep_along = sorted(group['along_vals'])[len(group['along_vals'])//2]
         rep_point = line.interpolate(rep_along)
@@ -302,7 +347,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         for hp_idx in group['indices']:
             hp_items[hp_idx]['rotation'] = angle
     for hp in hp_items:
-        if 'rotation' not in hp:
+        if 'rotation' not in hp and cables:
             best_angle, best_dist = 0.0, float("inf")
             for c in cables:
                 dist = c['line'].distance(Point(hp['xy']))
@@ -321,7 +366,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-    # draw points (FAT/FDT/POLE)
+    # draw points (FAT/FDT/POLE) -> sekarang block + teks ROTATE mengikuti kabel
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -338,6 +383,16 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
                 block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
 
+            # cari kabel terdekat untuk menentukan rotasi
+            rot_angle = 0.0
+            proj_point = Point(x, y)
+            if cables:
+                c_idx, angle, proj_pt, dist = find_nearest_cable_segment((x, y), cables, min_seg_len=min_seg_len)
+                if c_idx is not None:
+                    rot_angle = angle
+                    proj_point = proj_pt
+
+            inserted = False
             if block_name:
                 try:
                     scale = 1.0
@@ -348,21 +403,34 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     elif "POLE" in layer_name:
                         scale = 1.0
 
+                    # tambahkan block dengan rotasi sesuai kabel
                     msp.add_blockref(
                         block_name, (x, y),
                         dxfattribs={
                             "layer": true_layer,
                             "xscale": scale,
                             "yscale": scale,
-                            "zscale": scale
+                            "zscale": scale,
+                            "rotation": rot_angle
                         }
                     )
+                    inserted = True
                 except Exception as e:
                     st.warning(f"Gagal insert block {block_name}: {e}")
-            else:
+                    inserted = False
+
+            if not inserted:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
-            # --- teks SELALU ditambahkan ---
+            # buat teks yang ROTATE mengikuti kabel juga
+            # letakkan di titik proyeksi ke kabel, geser sedikit tegak lurus agar tidak menimpa block
+            rad = math.radians(rot_angle)
+            # vektor tegak lurus (unit)
+            perp_x, perp_y = -math.sin(rad), math.cos(rad)
+            # geser ke sisi (positif) sedikit supaya teks tidak menindih block
+            label_x = proj_point.x + perp_x * text_offset
+            label_y = proj_point.y + perp_y * text_offset
+
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
             msp.add_text(
                 obj.get("name", ""),
@@ -370,11 +438,12 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
                     "color": 1 if text_layer == "FEATURE_LABEL" else 256,
-                    "insert": (x + 2, y)
+                    "insert": (label_x, label_y),
+                    "rotation": rot_angle
                 }
             )
 
-    # draw HP
+    # draw HP (tetap seperti sebelumnya)
     for hp in hp_items:
         x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
         if "HP COVER" in hp['obj']['folder']:
@@ -395,6 +464,7 @@ def run_kmz_to_dwg():
     st.sidebar.header("Rotation parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
+    text_offset = st.sidebar.slider("Label offset from cable (m)", 0.0, 10.0, 2.5, 0.5)
 
     if uploaded_kmz:
         extract_dir="temp_kmz";os.makedirs(extract_dir,exist_ok=True)
@@ -409,7 +479,7 @@ def run_kmz_to_dwg():
         output_dxf="converted_output.dxf"
         try:
             result=build_dxf_with_smart_hp(classified,template_path,output_dxf,
-                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along)
+                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along, text_offset=text_offset)
             if result and os.path.exists(result):
                 st.success("✅ DXF berhasil dibuat.")
                 with open(result,"rb") as f:
