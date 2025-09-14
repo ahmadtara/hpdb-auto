@@ -300,15 +300,17 @@ def run_hpdb(HERE_API_KEY):
             if grp.empty:
                 continue
             # pick first and second rows (prefer rows where FAT Port == 1/2)
-            if (grp['FAT Port'] == 1).any():
-                idx_first = grp.index[grp['FAT Port'] == 1][0]
+            first_candidates = grp.index[grp['FAT Port'] == 1]
+            if len(first_candidates) > 0:
+                idx_first = first_candidates[0]
             else:
                 idx_first = grp.index[0]
-            if (grp['FAT Port'] == 2).any():
-                idx_second = grp.index[grp['FAT Port'] == 2][0]
+            second_candidates = grp.index[grp['FAT Port'] == 2]
+            if len(second_candidates) > 0:
+                idx_second = second_candidates[0]
             else:
                 idx_second = grp.index[1] if len(grp) > 1 else None
-
+                
             # Assign first row: Tray, Port, Tube, Core(odd)
             df.at[idx_first, "FDT Tray (Front)"] = current_tray
             df.at[idx_first, "FDT Port"] = current_port
@@ -338,4 +340,5 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
