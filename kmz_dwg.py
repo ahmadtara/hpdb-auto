@@ -121,51 +121,36 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-
+# --- Fungsi Rotasi ---
 def segment_angle(p1, p2):
-    """Hitung sudut rotasi (derajat) antara dua titik garis"""
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
-    return math.degrees(math.atan2(dy, dx))
+    ang = math.degrees(math.atan2(dy, dx))
+    # Normalisasi agar konsisten kiri–kanan
+    if ang < -90:
+        ang += 180
+    if ang > 90:
+        ang -= 180
+    return ang
 
-def longest_segment_angle(coords):
-    """Cari sudut dari segmen terpanjang dalam polyline"""
-    max_len = 0
-    angle = 0
+def nearest_segment_angle(line: LineString, point: Point):
+    """Cari segmen terdekat ke titik, lalu ambil sudut segmen itu"""
+    coords = list(line.coords)
+    min_dist = float("inf")
+    best_angle = 0
     for i in range(len(coords) - 1):
-        x1, y1 = coords[i]
-        x2, y2 = coords[i + 1]
-        seg_len = math.hypot(x2 - x1, y2 - y1)
-        if seg_len > max_len:
-            max_len = seg_len
-            angle = segment_angle((x1, y1), (x2, y2))
-    return angle
-
+        p1 = coords[i]
+        p2 = coords[i + 1]
+        seg = LineString([p1, p2])
+        dist = seg.distance(point)
+        if dist < min_dist:
+            min_dist = dist
+            best_angle = segment_angle(p1, p2)
+    return best_angle
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
-
-    matchprop_hp = matchprop_pole = matchprop_sr = None
-    matchblock_fat = matchblock_fdt = matchblock_pole = None
-
-    for e in msp:
-        if e.dxftype() == 'TEXT':
-            txt = e.dxf.text.upper()
-            if 'NN-' in txt:
-                matchprop_hp = e.dxf
-            elif 'MR.SRMRW16' in txt:
-                matchprop_pole = e.dxf
-            elif 'SRMRW16.067.B01' in txt:
-                matchprop_sr = e.dxf
-        elif e.dxftype() == 'INSERT':
-            name = e.dxf.name.upper()
-            if name == "FAT":
-                matchblock_fat = e.dxf
-            elif name == "FDT":
-                matchblock_fdt = e.dxf
-            elif name.startswith("A$"):
-                matchblock_pole = e.dxf
 
     # --- Kumpulkan semua koordinat ---
     all_xy = []
@@ -211,7 +196,6 @@ def draw_to_template(classified, template_path):
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
             if obj['type'] != 'point':
-                # hanya tambahkan polyline kalau jumlah titik >= 2
                 if len(obj['xy_path']) >= 2:
                     msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
                 elif len(obj['xy_path']) == 1:
@@ -226,13 +210,13 @@ def draw_to_template(classified, template_path):
                 if homepass_lines:
                     hp_point = Point(x, y)
                     nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
-                    rotation = longest_segment_angle(list(nearest_line.coords))
+                    rotation = nearest_segment_angle(nearest_line, hp_point)
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 6,
                     "layer": "FEATURE_LABEL",
                     "color": 6,
-                    "insert": (x, y),   # posisi asli tetap
+                    "insert": (x, y),
                     "rotation": rotation
                 })
                 continue
@@ -243,80 +227,21 @@ def draw_to_template(classified, template_path):
                 if homepass_lines:
                     hp_point = Point(x, y)
                     nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
-                    rotation = longest_segment_angle(list(nearest_line.coords))
+                    rotation = nearest_segment_angle(nearest_line, hp_point)
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 3.0,
                     "layer": "FEATURE_LABEL",
                     "color": 7,
-                    "insert": (x, y),   # posisi asli tetap
+                    "insert": (x, y),
                     "rotation": rotation
                 })
                 continue
 
-            # --- Lainnya (FAT, FDT, POLE, dsb) ---
-            block_name = None
-            matchblock = None
-
-            if layer_name == "FAT":
-                block_name = "FAT"
-                matchblock = matchblock_fat
-            elif layer_name == "FDT":
-                block_name = "FDT"
-                matchblock = matchblock_fdt
-            elif layer_name == "NEW_POLE":
-                block_name = "A$C14dd5346"
-                matchblock = matchblock_pole
-            elif layer_name == "EXISTING_POLE":
-                block_name = "A$Cdb6fd7d1" if obj['folder'] in [
-                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
-                ] else "A$C14dd5346"
-                matchblock = matchblock_pole
-
-            inserted_block = False
-            if block_name:
-                try:
-                    scale_x = getattr(matchblock, "xscale", 1.0)
-                    scale_y = getattr(matchblock, "yscale", 1.0)
-                    scale_z = getattr(matchblock, "zscale", 1.0)
-                    if layer_name == "FDT":
-                        scale_x = scale_y = scale_z = 0.0025
-                    msp.add_blockref(
-                        name=block_name,
-                        insert=(x, y),
-                        dxfattribs={
-                            "layer": true_layer,
-                            "xscale": scale_x,
-                            "yscale": scale_y,
-                            "zscale": scale_z,
-                        }
-                    )
-                    inserted_block = True
-                except Exception as e:
-                    print(f"Gagal insert block {block_name}: {e}")
-
-            if not inserted_block:
-                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-
-            # Tambah teks untuk FDT/FAT/POLE
-            if layer_name != "FDT":
-                text_layer = "FEATURE_LABEL" if obj['folder'] in [
-                    "NEW POLE 7-3", "NEW POLE 7-4", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
-                ] else true_layer
-
-                text_color = 1 if text_layer == "FEATURE_LABEL" else 256
-                text_height = 3.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5
-
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": text_height,
-                    "layer": text_layer,
-                    "color": text_color,
-                    "insert": (x + 2, y)
-                })
+            # --- Lainnya ---
+            msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
     return doc
-
-
 
 def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD ")
@@ -326,7 +251,7 @@ def run_kmz_to_dwg():
 1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
 2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
 """, unsafe_allow_html=True)
-               
+
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
