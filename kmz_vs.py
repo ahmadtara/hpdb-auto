@@ -1,111 +1,104 @@
 import streamlit as st
 import zipfile
-import os
 import xml.etree.ElementTree as ET
-import pandas as pd
-import tempfile
+from io import BytesIO
+import re
+from openpyxl import load_workbook
 
-def run_kmz_vs_hpdb():
-    st.set_page_config(page_title="KMZ vs Template XLSX Checker", layout="centered")
-    st.title("📍 Validasi HP COVER: KMZ vs Template XLSX")
-    st.markdown("""
-    ### ✨ Upload KMZ dan Template Excel
-    Akan dicek apakah semua `block.homenumber` di folder **HP COVER** dari file KMZ cocok dengan yang ada di template Excel.
-    """)
+def run_boq():
 
-    kmz_file = st.file_uploader("📁 Upload File KMZ", type=["kmz"])
-    template_file = st.file_uploader("📄 Upload Template XLSX", type=["xlsx"])
+    st.title("📊 KMZ ➜ BOQ - 1 FDT")
 
-    target_folder = "HP COVER"
-
-    def extract_placemarks(kmz_bytes):
-        placemarks = {}
-        with tempfile.TemporaryDirectory() as tmpdir:
-            kmz_path = os.path.join(tmpdir, "temp.kmz")
-            with open(kmz_path, "wb") as f:
-                f.write(kmz_bytes)
-
-            with zipfile.ZipFile(kmz_path, 'r') as zip_ref:
-                zip_ref.extractall(tmpdir)
-
-            kml_path = os.path.join(tmpdir, "doc.kml")
-            tree = ET.parse(kml_path)
-            root = tree.getroot()
-            ns = {'kml': 'http://www.opengis.net/kml/2.2'}
-
-            folders = root.findall('.//kml:Folder', ns)
-            for folder in folders:
-                name_tag = folder.find('kml:name', ns)
-                if name_tag is None:
-                    continue
-                folder_name = name_tag.text.strip().upper()
-                if folder_name != target_folder:
-                    continue
-                placemarks[folder_name] = []
-
-                for pm in folder.findall('.//kml:Placemark', ns):
-                    name = pm.find('kml:name', ns)
-                    name_text = name.text.strip() if name is not None else ""
-                    placemarks[folder_name].append({"name": name_text})
-
-        return placemarks
+    kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+    template_file = st.file_uploader("Upload TEMPLATE BOQ - 1 FDT.xlsx", type=["xlsx"])
 
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
-        placemarks = extract_placemarks(kmz_bytes)
-        df = pd.read_excel(template_file)
 
-        if target_folder not in placemarks:
-            st.error(f"❌ Folder '{target_folder}' tidak ditemukan dalam KMZ!")
-        else:
-            hp = placemarks[target_folder]
+        # --- Extract KMZ ---
+        def recurse_folder(folder, ns, path=""):
+            items = []
+            name_el = folder.find("kml:name", ns)
+            folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
+            new_path = f"{path}/{folder_name}" if path else folder_name
+            for sub in folder.findall("kml:Folder", ns):
+                items += recurse_folder(sub, ns, new_path)
+            for pm in folder.findall("kml:Placemark", ns):
+                nm = pm.find("kml:name", ns)
+                desc = pm.find("kml:description", ns)
+                coord = pm.find(".//kml:coordinates", ns)
+                items.append({
+                    "name": nm.text.strip() if nm is not None else "",
+                    "desc": desc.text.strip() if desc is not None else "",
+                    "path": new_path
+                })
+            return items
 
-            # Ambil block & homenumber dari KMZ
-            kmz_blocks_homenumbers = set()
-            for h in hp:
-                name_parts = h["name"].split(".")
-                if len(name_parts) == 2:
-                    block, homenumber = name_parts[0].strip().upper(), name_parts[1].strip()
-                    kmz_blocks_homenumbers.add((block, homenumber))
-                else:
-                    st.warning(f"❗ Format salah di placemark: '{h['name']}' (abaikan)")
+        with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
+            f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
+            root = ET.parse(z.open(f)).getroot()
+            ns = {"kml": "http://www.opengis.net/kml/2.2"}
+            placemarks = []
+            for folder in root.findall(".//kml:Folder", ns):
+                placemarks += recurse_folder(folder, ns)
 
-            # Ambil block & homenumber dari XLSX
-            xlsx_blocks_homenumbers = set()
-            if "block" not in df.columns or "homenumber" not in df.columns:
-                st.error("❌ Kolom 'block' dan 'homenumber' harus ada di template XLSX!")
-            else:
-                for _, row in df.iterrows():
-                    block = str(row["block"]).strip().upper()
-                    homenumber = str(row["homenumber"]).strip()
-                    xlsx_blocks_homenumbers.add((block, homenumber))
+        # --- Filter by folder ---
+        def get_items(foldername):
+            return [p for p in placemarks if foldername in p["path"]]
 
-                # Cek selisih dua set
-                kmz_only = kmz_blocks_homenumbers - xlsx_blocks_homenumbers
-                xlsx_only = xlsx_blocks_homenumbers - kmz_blocks_homenumbers
+        dist = get_items("DISTRIBUTION CABLE")
+        sling = get_items("SLING WIRE")
+        fat = get_items("FAT")
+        new_pole_74 = get_items("NEW POLE 7-4")
+        new_pole_73 = get_items("NEW POLE 7-3")
+        exist_pole = get_items("EXISTING POLE EMR 7-4") + get_items("EXISTING POLE EMR 7-3")
 
-                if not kmz_only and not xlsx_only:
-                    st.success("✅ Semua block dan homenumber di XLSX sesuai dengan HP COVER di KMZ!")
-                else:
-                    st.error("❌ Ada perbedaan antara XLSX dan HP COVER!")
+        # --- Excel Load ---
+        wb = load_workbook(template_file)
+        ws = wb["BoM AE"]
 
-                    diff_data = []
+        # --- Distribution Cable Logic ---
+        line_map = {"A": [2, 6, 10], "B": [3, 7, 11], "C": [4, 8, 12], "D": [5, 9, 13]}
+        for line, cells in line_map.items():
+            fat_line = [p for p in fat if f"LINE {line}" in p["path"]]
+            cnt = len(fat_line)
+            # ambil angka dari description
+            dist_line = [int(re.search(r"\d+", p["desc"]).group()) for p in dist if f"LINE {line}" in p["path"] and re.search(r"\d+", p["desc"])]
+            if cnt in range(1,11) and dist_line:
+                ws[f"C{cells[0]}"] = sum(dist_line)
+            elif cnt in range(11,16) and dist_line:
+                ws[f"C{cells[1]}"] = sum(dist_line)
+            elif cnt in range(16,21) and dist_line:
+                ws[f"C{cells[2]}"] = sum(dist_line)
 
-                    if kmz_only:
-                        st.warning(f"🔹 Di KMZ (HP COVER) tapi TIDAK ADA di XLSX: {len(kmz_only)} item")
-                        for b, h in kmz_only:
-                            diff_data.append({"block": b, "homenumber": h, "sumber": "KMZ Only"})
+        # --- Sling Wire (C15) ---
+        sling_total = sum([int(re.search(r"\d+", p["name"]).group()) for p in sling if re.search(r"\d+", p["name"])])
+        ws["C15"] = sling_total
 
-                    if xlsx_only:
-                        st.warning(f"🔸 Di XLSX tapi TIDAK ADA di KMZ (HP COVER): {len(xlsx_only)} item")
-                        for b, h in xlsx_only:
-                            diff_data.append({"block": b, "homenumber": h, "sumber": "XLSX Only"})
+        # --- FAT Total Logic ---
+        total_fat = len(fat)
+        if 1 <= total_fat <= 24:
+            ws["C30"] = total_fat
+        elif 25 <= total_fat <= 36:
+            ws["C31"] = total_fat
+        elif 37 <= total_fat <= 48:
+            ws["C32"] = total_fat
 
-                    diff_df = pd.DataFrame(diff_data)
-                    st.dataframe(diff_df, use_container_width=True)
+        # --- FAT per Line ---
+        ws["C36"] = len([p for p in fat if "LINE A" in p["path"]])
+        ws["C37"] = len([p for p in fat if "LINE B" in p["path"]])
+        ws["C38"] = len([p for p in fat if "LINE C" in p["path"]])
+        ws["C39"] = len([p for p in fat if "LINE D" in p["path"]])
 
-                    # Download button
-                    csv = diff_df.to_csv(index=False).encode("utf-8")
-                    st.download_button("📥 Download Selisih CSV", data=csv, file_name="selisih_kmz_vs_xlsx.csv", mime="text/csv")
-    else:
-        st.info("⬆️ Silakan upload file KMZ dan template XLSX terlebih dahulu.")
+        # --- Poles ---
+        ws["C54"] = len(new_pole_74)
+        ws["C55"] = len(new_pole_73)
+        ws["C60"] = len(exist_pole)
+
+        # --- Save to Bytes ---
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        st.success("✅ BOQ berhasil dibuat!")
+        st.download_button("📥 Download BOQ", buf.getvalue(), file_name="hasil_BOQ.xlsx")
