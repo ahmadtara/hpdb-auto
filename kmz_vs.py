@@ -74,13 +74,14 @@ def run_boq():
         fn = foldername.upper()
         return [p for p in placemarks if fn in p["path"]]
 
-    # ---------- collect categories ----------
+    # ---------- collect categories ---------- 
     dist = get_items("DISTRIBUTION CABLE")
     sling = get_items("SLING WIRE")
     fat = get_items("FAT")
     new_pole_74 = get_items("NEW POLE 7-4")
     new_pole_73 = get_items("NEW POLE 7-3")
     exist_pole = get_items("EXISTING POLE EMR 7-4") + get_items("EXISTING POLE EMR 7-3")
+    hp_cover = get_items("HP COVER")
 
     # ---------- calculations ----------
     lines = ["A", "B", "C", "D"]
@@ -95,7 +96,7 @@ def run_boq():
                     dist_per_line[L] += v
                 break
 
-    # Sling: jumlah angka dari name hanya untuk LINE A/B/C (sesuai permintaan)
+    # Sling: jumlah angka dari name hanya untuk LINE A/B/C
     sling_items_abc = [p for p in sling if any(f"LINE {L}" in p["path"] for L in ["A", "B", "C"])]
     sling_nums = []
     for p in sling_items_abc:
@@ -108,7 +109,11 @@ def run_boq():
     fat_counts = {L: len([p for p in fat if f"LINE {L}" in p["path"]]) for L in lines}
     total_fat = sum(fat_counts.values())
 
-    # Poles counts (hitung total untuk A,B,C lines)
+    # HP COVER per line & total
+    hp_cover_counts = {L: len([p for p in hp_cover if f"LINE {L}" in p["path"]]) for L in lines}
+    total_hp_cover = sum(hp_cover_counts.values())
+
+    # Poles counts
     def count_items_in_lines(items, lines_list=["A", "B", "C"]):
         return len([p for p in items if any(f"LINE {L}" in p["path"] for L in lines_list)])
 
@@ -116,7 +121,7 @@ def run_boq():
     np73_count = count_items_in_lines(new_pole_73, ["A", "B", "C"])
     exist_count = count_items_in_lines(exist_pole, ["A", "B", "C"])
 
-    # ---------- show summary (debug / verifikasi) ----------
+    # ---------- show summary ----------
     st.markdown("### 🔎 Summary from KMZ (raw counts)")
     df_summary = pd.DataFrame([
         {"metric": "Distribution A (desc sum)", "value": dist_per_line["A"]},
@@ -129,13 +134,18 @@ def run_boq():
         {"metric": "FAT B (count)", "value": fat_counts["B"]},
         {"metric": "FAT C (count)", "value": fat_counts["C"]},
         {"metric": "FAT D (count)", "value": fat_counts["D"]},
+        {"metric": "HP COVER total (all lines)", "value": total_hp_cover},
+        {"metric": "HP COVER A (count)", "value": hp_cover_counts["A"]},
+        {"metric": "HP COVER B (count)", "value": hp_cover_counts["B"]},
+        {"metric": "HP COVER C (count)", "value": hp_cover_counts["C"]},
+        {"metric": "HP COVER D (count)", "value": hp_cover_counts["D"]},
         {"metric": "NEW POLE 7-4 (A/B/C)", "value": np74_count},
         {"metric": "NEW POLE 7-3 (A/B/C)", "value": np73_count},
         {"metric": "EXISTING POLE EMR 7-4+7-3 (A/B/C)", "value": exist_count},
     ])
     st.table(df_summary)
 
-    # ---------- write into Excel (BoM AE) using the exact mapping you requested ----------
+    # ---------- write into Excel ----------
     wb = load_workbook(template_file)
     ws = wb["BoM AE"]
 
@@ -175,6 +185,14 @@ def run_boq():
     ws["C54"] = np74_count
     ws["C55"] = np73_count
     ws["C60"] = exist_count
+
+    # Tambahan: sheet "BoQ NRO Cluster"
+    ws2 = wb["BoQ NRO Cluster"]
+    # isi total HP COVER di O5
+    ws2["O5"] = total_hp_cover
+    # isi nama file kmz di O3
+    kmz_name = kmz_file.name.rsplit(".", 1)[0]
+    ws2["O3"] = kmz_name
 
     # ---------- save and provide download ----------
     buf = BytesIO()
