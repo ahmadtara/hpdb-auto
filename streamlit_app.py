@@ -74,6 +74,7 @@ from from_hpdb import run_hpdb
 from kml_dxf import run_kml_dxf
 from kmz_dwg import run_kmz_to_dwg  # ✅ Tambahkan ini
 from kmz_vs import run_boq  # ✅ Tambahkan ini
+from sf import run_sf  # ✅ Tambahkan ini
 
 # -------------- ✅ APLIKASI UTAMA ---------------- #
 if "logged_in" not in st.session_state:
@@ -88,6 +89,7 @@ else:
         "KML → Jalan",
         "KMZ → DWG",  # ✅ Tambahkan menu baru
         "KMZ → BOQ",  # ✅ Tambahan menu baru
+        "KMZ → DWG SF",  # ✅ Tambahan menu baru
         "Logout"
     ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
@@ -100,10 +102,13 @@ else:
         run_kmz_to_dwg()
     elif menu == "KMZ → BOQ":
         run_boq()
+    elif menu == "KMZ → DWG SF":
+        run_sf()
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
