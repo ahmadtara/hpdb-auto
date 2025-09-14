@@ -243,41 +243,39 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-       # ====== COPY MAPPING PER FAT ID DENGAN LOGIKA TRAY/PORT/CORE ======
-for fat_id, group in df.groupby("FAT ID", sort=False):
-    if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-        continue
+        # ====== AUTO FILL FDT Tray (Front), FDT Port, Tube Colour, Core Number ======
+        for fat_id, group in df.groupby("FAT ID", sort=False):
+            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+                continue
 
-    indices = list(group.index)
+            indices = list(group.index)
 
-    tray = 1
-    port = 1
-    tube = 1
-    core = 1
-
-    for idx in indices:
-        # Tray fix 1
-        df.at[idx, "FDT Tray (Front)"] = tray
-
-        # Port naik tiap 2 core
-        df.at[idx, "FDT Port"] = port
-
-        # Core number naik 1–10
-        df.at[idx, "Core Number"] = core
-
-        # Tube colour naik setelah 10 core
-        df.at[idx, "Tube Colour"] = tube
-
-        # Increment core
-        core += 1
-        if core > 10:
+            tray = 1
+            port = 1
+            tube = 1
             core = 1
-            tube += 1
 
-        # Increment port setiap 2 core
-        if core % 2 == 1:  # setelah 2 core, naik port
-            port += 1
+            for idx in indices:
+                # Tray fix 1
+                df.at[idx, "FDT Tray (Front)"] = tray
 
+                # Assign port
+                df.at[idx, "FDT Port"] = port
+
+                # Assign core
+                df.at[idx, "Core Number"] = core
+
+                # Assign tube
+                df.at[idx, "Tube Colour"] = tube
+
+                # === Increment rules ===
+                core += 1
+                if core > 10:  # reset core, naik tube
+                    core = 1
+                    tube += 1
+
+                if core % 2 == 1:  # setiap 2 core, naik port
+                    port += 1
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -285,4 +283,3 @@ for fat_id, group in df.groupby("FAT ID", sort=False):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
