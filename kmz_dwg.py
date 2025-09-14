@@ -128,8 +128,8 @@ def segment_angle(p1, p2):
 
 def nearest_cable_angle(pt, cables, min_seg_len=15.0):
     """
-    Cari sudut segmen kabel terdekat dari titik HP,
-    tapi abaikan segmen yang terlalu pendek (< min_seg_len).
+    Cari sudut segmen kabel terdekat dari titik HP.
+    Abaikan segmen yang terlalu pendek (< min_seg_len).
     """
     point = Point(pt)
     nearest_angle = 0.0
@@ -153,42 +153,24 @@ def nearest_cable_angle(pt, cables, min_seg_len=15.0):
 
     return nearest_angle
 
-
-def cluster_points(points, threshold=20):
+def smooth_rotations(hp_points, threshold=25.0):
     """
-    Cluster HP yang jaraknya dekat (<= threshold).
+    Samakan rotasi HP dalam 1 deret (berdekatan).
+    Kalau beda rotasi antar tetangga terlalu jauh -> pakai rata-rata.
     """
-    clusters = []
-    used = set()
-    for i, p in enumerate(points):
-        if i in used:
-            continue
-        cluster = [i]
-        used.add(i)
-        for j, q in enumerate(points):
-            if j in used:
-                continue
-            dist = math.hypot(p[0]-q[0], p[1]-q[1])
-            if dist <= threshold:
-                cluster.append(j)
-                used.add(j)
-        clusters.append(cluster)
-    return clusters
-
-def unify_hp_rotations(hp_items, cables):
-    """
-    Samakan rotasi HP dalam cluster → ikut kabel terdekat.
-    """
-    if not hp_items:
+    if not hp_points:
         return
-    coords = [obj['xy'] for obj in hp_items]
-    clusters = cluster_points(coords, threshold=20)
-    for cluster in clusters:
-        rep_idx = cluster[0]
-        rep_pt = coords[rep_idx]
-        angle = nearest_cable_angle(rep_pt, cables)
-        for idx in cluster:
-            hp_items[idx]['rotation'] = angle
+
+    for i in range(1, len(hp_points) - 1):
+        prev_angle = hp_points[i - 1]["rotation"]
+        curr_angle = hp_points[i]["rotation"]
+        next_angle = hp_points[i + 1]["rotation"]
+
+        avg_angle = (prev_angle + next_angle) / 2.0
+
+        # kalau beda jauh dari tetangga, pakai rata-rata
+        if abs(curr_angle - avg_angle) > threshold:
+            hp_points[i]["rotation"] = avg_angle
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
@@ -227,9 +209,7 @@ def draw_to_template(classified, template_path):
 
     cables = classified.get("DISTRIBUTION_CABLE", [])
 
-    # --- unify rotation dulu untuk HP ---
-    unify_hp_rotations(classified["HP_COVER"], cables)
-    unify_hp_rotations(classified["HP_UNCOVER"], cables)
+    hp_points = []
 
     # --- Gambar semua ---
     for layer_name, cat_items in classified.items():
@@ -243,24 +223,10 @@ def draw_to_template(classified, template_path):
                 continue
 
             x, y = obj['xy']
-            rotation = obj.get("rotation", 0.0)
-
-            if layer_name == "HP_COVER":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 6,
-                    "layer": "FEATURE_LABEL",
-                    "color": 6,
-                    "insert": (x, y),
-                    "rotation": rotation
-                })
-            elif layer_name == "HP_UNCOVER":
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": 3.0,
-                    "layer": "FEATURE_LABEL",
-                    "color": 7,
-                    "insert": (x, y),
-                    "rotation": rotation
-                })
+            rotation = 0.0
+            if layer_name in ["HP_COVER", "HP_UNCOVER"]:
+                rotation = nearest_cable_angle((x, y), cables)
+                hp_points.append({"x": x, "y": y, "rotation": rotation, "name": obj["name"], "layer": layer_name})
             else:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
                 msp.add_text(obj["name"], dxfattribs={
@@ -269,6 +235,29 @@ def draw_to_template(classified, template_path):
                     "color": 1,
                     "insert": (x + 2, y)
                 })
+
+    # --- Samakan rotasi HP satu deret ---
+    hp_points.sort(key=lambda p: (p["x"], p["y"]))  # urutkan kira-kira per deret
+    smooth_rotations(hp_points)
+
+    # --- Gambar HP setelah dismoothing ---
+    for hp in hp_points:
+        if hp["layer"] == "HP_COVER":
+            msp.add_text(hp["name"], dxfattribs={
+                "height": 6,
+                "layer": "FEATURE_LABEL",
+                "color": 6,
+                "insert": (hp["x"], hp["y"]),
+                "rotation": hp["rotation"]
+            })
+        elif hp["layer"] == "HP_UNCOVER":
+            msp.add_text(hp["name"], dxfattribs={
+                "height": 3.0,
+                "layer": "FEATURE_LABEL",
+                "color": 7,
+                "insert": (hp["x"], hp["y"]),
+                "rotation": hp["rotation"]
+            })
 
     return doc
 
@@ -300,4 +289,3 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
-
