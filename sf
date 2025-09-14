@@ -210,7 +210,7 @@ def draw_to_template(classified, template_path):
 
     return doc
 
-def run_kmz_to_dwg():
+def run_sf():
     st.title("🏗️ KMZ ➝ DWG (Subset Folder)")
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
