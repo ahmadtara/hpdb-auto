@@ -26,9 +26,9 @@ def run_hpdb(HERE_API_KEY):
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-    # ------------------------------ #
-    #  Extract placemarks from KMZ   #
-    # ------------------------------ #
+    # ------------------------------
+    # Extract placemarks
+    # ------------------------------
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
             for xpath in [
@@ -126,7 +126,6 @@ def run_hpdb(HERE_API_KEY):
         fat = placemarks["FAT"]
         hp = placemarks["HP COVER"]
         fdt = placemarks["FDT"]
-
         all_poles = (
             placemarks["NEW POLE 7-3"]
             + placemarks["EXISTING POLE EMR 7-3"]
@@ -154,13 +153,11 @@ def run_hpdb(HERE_API_KEY):
         progress = st.progress(0)
         total = len(hp)
 
-        must_cols = [
-            "block", "homenumber", "fdtcode", "oltcode", "fatcode",
-            "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
-            "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
-            "Line", "Capacity", "FAT Port",
-            "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"
-        ]
+        must_cols = ["block", "homenumber", "fdtcode", "oltcode", "fatcode",
+                     "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
+                     "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
+                     "Line", "Capacity", "FAT Port",
+                     "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
@@ -243,38 +240,43 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING PER FAT ID DENGAN LOGIKA TRAY/PORT/CORE ======
+        # ====== COPY MAPPING PER FAT ID (UPDATED LOGIC) ======
         def is_filled(val):
             return not (pd.isna(val) or str(val).strip() == "")
 
-        for fat_id, group in df.groupby("FAT ID", sort=False):
-            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-                continue
+        if len(mapping_df) > 0:
+            for fat_id, group in df.groupby("FAT ID", sort=False):
+                if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+                    continue
 
-            indices = list(group.index)
-            anchors = [idx for idx in indices if is_filled(df.at[idx, "Line"])]
+                indices = list(group.index)
+                anchors = [idx for idx in indices if is_filled(df.at[idx, "Line"])]
 
-            tray = 1
-            port = 1
-            tube = 1
-            core = 1
+                tray = 1
+                port = 1
+                tube = 1
+                core = 1
 
-            for anchor in anchors:
-                df.at[anchor, "FDT Tray (Front)"] = tray
-                df.at[anchor, "FDT Port"] = port
-                df.at[anchor, "Tube Colour"] = tube
-                df.at[anchor, "Core Number"] = core
+                for anchor in anchors:
+                    # FDT Tray & Port
+                    df.at[anchor, "FDT Tray (Front)"] = tray
+                    df.at[anchor, "FDT Port"] = port
 
-                # increment sesuai pola
-                port += 1
-                if port > 10:
-                    port = 1
-                    tray += 1
+                    # Tube & Core
+                    df.at[anchor, "Tube Colour"] = tube
+                    df.at[anchor, "Core Number"] = core
 
-                core += 1
-                if core > 10:
-                    core = 1
-                    tube += 1
+                    # increment Port + Tray
+                    port += 1
+                    if port > 10:
+                        port = 1
+                        tray += 1
+
+                    # increment Core + Tube
+                    core += 1
+                    if core > 10:
+                        core = 1
+                        tube += 1
 
         progress.empty()
         st.success("✅ Selesai!")
