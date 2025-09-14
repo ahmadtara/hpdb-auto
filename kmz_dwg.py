@@ -263,6 +263,15 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
     return groups, hp_meta
 
 # ----------------------------
+# offset helper for text placement
+# ----------------------------
+def offset_xy(x, y, angle_deg, dist=2.5):
+    """Geser koordinat (x,y) menjauh dari garis sesuai sudut (tegak lurus)."""
+    # angle_deg adalah arah segmen (deg). Geser tegak lurus (angle + 90)
+    angle_rad = math.radians(angle_deg + 90)
+    return (x + dist * math.cos(angle_rad), y + dist * math.sin(angle_rad))
+
+# ----------------------------
 # Main DXF building + rotation assignment
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
@@ -352,8 +361,58 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     best_angle = nearest_segment_angle_with_minlen(hp['xy'], line, min_seg_len)
             hp['rotation'] = best_angle
 
-    # (Optional) smoothing across sequence: if a hp rotation differs drastically from neighbors in same cable group,
-    # replace with group rotation — but since we assign group rotation already, this is usually not necessary.
+    # ----------------------------
+    # Assign rotation for POLES (NEW & EXISTING), FAT, FDT
+    # ----------------------------
+    pole_items = []
+    for obj in classified.get("NEW_POLE", []) + classified.get("EXISTING_POLE", []):
+        if 'xy' in obj:
+            best_angle = 0.0
+            best_dist = float("inf")
+            best_line = None
+            for c in cables:
+                line = c['line']
+                dist = line.distance(Point(obj['xy']))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_line = line
+            if best_line is not None:
+                best_angle = nearest_segment_angle_with_minlen(obj['xy'], best_line, min_seg_len)
+            pole_items.append({'obj': obj, 'rotation': best_angle})
+
+    fat_items = []
+    for obj in classified.get("FAT", []):
+        if 'xy' in obj:
+            best_angle = 0.0
+            best_dist = float("inf")
+            best_line = None
+            for c in cables:
+                line = c['line']
+                dist = line.distance(Point(obj['xy']))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_line = line
+            if best_line is not None:
+                best_angle = nearest_segment_angle_with_minlen(obj['xy'], best_line, min_seg_len)
+            fat_items.append({'obj': obj, 'rotation': best_angle})
+
+    fdt_items = []
+    for obj in classified.get("FDT", []):
+        if 'xy' in obj:
+            best_angle = 0.0
+            best_dist = float("inf")
+            best_line = None
+            for c in cables:
+                line = c['line']
+                dist = line.distance(Point(obj['xy']))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_line = line
+            if best_line is not None:
+                best_angle = nearest_segment_angle_with_minlen(obj['xy'], best_line, min_seg_len)
+            fdt_items.append({'obj': obj, 'rotation': best_angle})
+
+    # (Optional) smoothing etc could be added here
 
     # --- DRAW: first draw polylines (cables + others) ---
     for layer_name, cat_items in classified.items():
@@ -365,11 +424,11 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 elif len(obj.get('xy_path', [])) == 1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-    # draw non-HP points (poles, FAT, FDT) and prepare a map for HP drawing
+    # draw non-HP points except POLE/FAT/FDT (we handle those specifically)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
-        if layer_name in ("HP_COVER", "HP_UNCOVER"):
-            continue  # skip HP here, draw after we gathered rotations
+        if layer_name in ("HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "FAT", "FDT"):
+            continue  # skip here, draw later with rotation/offset
         for obj in cat_items:
             if obj['type'] == 'point':
                 x, y = obj['xy']
@@ -382,27 +441,77 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     "insert": (x + 2, y)
                 })
 
-    # draw HP texts with assigned rotations
+    # draw POLE with rotation + offset
+    for pole in pole_items:
+        x, y = pole['obj']['xy']
+        rot = pole['rotation']
+        name = pole['obj'].get('name', '')
+        # draw pole symbol
+        msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": "POLE"})
+        # offset text slightly away from line to avoid overlap
+        tx, ty = offset_xy(x, y, rot, dist=3.5)
+        msp.add_text(name, dxfattribs={
+            "height": 3.0,
+            "layer": "FEATURE_LABEL",
+            "color": 2,
+            "insert": (tx, ty),
+            "rotation": rot
+        })
+
+    # draw FAT texts with rotation + offset
+    for fat in fat_items:
+        x, y = fat['obj']['xy']
+        rot = fat['rotation']
+        name = fat['obj'].get('name', '')
+        # draw marker
+        msp.add_circle(center=(x, y), radius=1.8, dxfattribs={"layer": "FAT"})
+        tx, ty = offset_xy(x, y, rot, dist=4.0)
+        msp.add_text(name, dxfattribs={
+            "height": 4.0,
+            "layer": "FEATURE_LABEL",
+            "color": 3,
+            "insert": (tx, ty),
+            "rotation": rot
+        })
+
+    # draw FDT texts with rotation + offset
+    for fdt in fdt_items:
+        x, y = fdt['obj']['xy']
+        rot = fdt['rotation']
+        name = fdt['obj'].get('name', '')
+        # draw marker
+        msp.add_circle(center=(x, y), radius=1.8, dxfattribs={"layer": "FDT"})
+        tx, ty = offset_xy(x, y, rot, dist=4.0)
+        msp.add_text(name, dxfattribs={
+            "height": 3.5,
+            "layer": "FEATURE_LABEL",
+            "color": 4,
+            "insert": (tx, ty),
+            "rotation": rot
+        })
+
+    # draw HP texts with assigned rotations (already computed)
     for hp in hp_items:
         x, y = hp['xy']
         rot = hp.get('rotation', 0.0)
         name = hp['obj'].get('name', '')
         layername = hp['obj']['folder']
         if "HP COVER" in layername:
+            tx, ty = offset_xy(x, y, rot, dist=2.5)
             msp.add_text(name, dxfattribs={
                 "height": 6,
                 "layer": "FEATURE_LABEL",
                 "color": 6,
-                "insert": (x, y),
+                "insert": (tx, ty),
                 "rotation": rot
             })
         else:
-            # HP UNCOVER
+            tx, ty = offset_xy(x, y, rot, dist=2.0)
             msp.add_text(name, dxfattribs={
                 "height": 3.0,
                 "layer": "FEATURE_LABEL",
                 "color": 7,
-                "insert": (x, y),
+                "insert": (tx, ty),
                 "rotation": rot
             })
 
@@ -420,6 +529,7 @@ def run_kmz_to_dwg():
     - Rotasi HP mengikuti DISTRIBUTION CABLE.
     - Segmen kabel pendek (< min seg len) diabaikan agar HP di belokan kecil tidak belok sendiri.
     - HP digroup berdasarkan proyeksi sepanjang kabel; tiap group (deret) pakai rotasi yang sama.
+    - POLE, FAT & FDT juga diberi rotasi mengikuti kabel terdekat dan teksnya digeser sedikit agar tidak menempel ke garis/block.
     """)
 
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
