@@ -208,7 +208,7 @@ def draw_to_template(classified, template_path):
 
             # kasih teks label
             msp.add_text(obj["name"], dxfattribs={
-                "height": 4.5,
+                "height": 5.0,
                 "layer": target_layer,
                 "insert": (x + 2, y)
             })
