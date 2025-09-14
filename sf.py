@@ -230,7 +230,7 @@ def draw_to_template(classified, template_path):
                     print(f"Gagal insert block {block_name}: {e}")
 
                 if not inserted_block:
-                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
+                    msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
 
                 # hitung rotasi teks dari jalan terdekat
                 angle = nearest_road_angle(x, y, roads)
