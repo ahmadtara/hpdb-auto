@@ -126,9 +126,10 @@ def segment_angle(p1, p2):
     dy = p2[1] - p1[1]
     return math.degrees(math.atan2(dy, dx))
 
-def nearest_cable_angle(pt, cables):
+def nearest_cable_angle(pt, cables, min_seg_len=15.0):
     """
-    Cari sudut segmen kabel terdekat dari titik HP
+    Cari sudut segmen kabel terdekat dari titik HP,
+    tapi abaikan segmen yang terlalu pendek (< min_seg_len).
     """
     point = Point(pt)
     nearest_angle = 0.0
@@ -137,22 +138,21 @@ def nearest_cable_angle(pt, cables):
     for cable in cables:
         if "xy_path" not in cable or len(cable["xy_path"]) < 2:
             continue
-        line = LineString(cable["xy_path"])
-        nearest_seg = None
-        nearest_seg_dist = float("inf")
-
         for i in range(len(cable["xy_path"]) - 1):
-            seg_line = LineString([cable["xy_path"][i], cable["xy_path"][i + 1]])
-            dist = seg_line.distance(point)
-            if dist < nearest_seg_dist:
-                nearest_seg_dist = dist
-                nearest_seg = seg_line
+            p1, p2 = cable["xy_path"][i], cable["xy_path"][i + 1]
+            seg_line = LineString([p1, p2])
+            seg_len = seg_line.length
 
-        if nearest_seg and nearest_seg_dist < min_dist:
-            min_dist = nearest_seg_dist
-            nearest_angle = segment_angle(nearest_seg.coords[0], nearest_seg.coords[1])
+            if seg_len < min_seg_len:
+                continue  # skip belokan pendek
+
+            dist = seg_line.distance(point)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_angle = segment_angle(p1, p2)
 
     return nearest_angle
+
 
 def cluster_points(points, threshold=20):
     """
@@ -300,3 +300,4 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
