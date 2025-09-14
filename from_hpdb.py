@@ -297,6 +297,8 @@ def run_hpdb(HERE_API_KEY):
                 prev_line = line
 
             grp = df[df['FAT ID'] == fat]
+            if grp.empty:
+                continue
             # pick first and second rows (prefer rows where FAT Port == 1/2)
             if (grp['FAT Port'] == 1).any():
                 idx_first = grp.index[grp['FAT Port'] == 1][0]
@@ -336,3 +338,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
