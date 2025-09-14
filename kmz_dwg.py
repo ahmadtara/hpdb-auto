@@ -6,6 +6,7 @@ import ezdxf
 from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
+from statistics import mean
 
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
@@ -127,9 +128,6 @@ def segment_angle(p1, p2):
     return math.degrees(math.atan2(dy, dx))
 
 def nearest_cable_angle(pt, cables):
-    """
-    Cari sudut segmen kabel terdekat dari titik HP
-    """
     point = Point(pt)
     nearest_angle = 0.0
     min_dist = float("inf")
@@ -154,6 +152,27 @@ def nearest_cable_angle(pt, cables):
             nearest_angle = segment_angle(nearest_seg.coords[0], nearest_seg.coords[1])
 
     return nearest_angle
+
+# === NEW: cluster rotasi HP ===
+def unify_hp_rotations(hp_points, cables, cluster_radius=15):
+    for hp in hp_points:
+        hp["base_rot"] = nearest_cable_angle(hp["xy"], cables)
+
+    for i, hp in enumerate(hp_points):
+        x, y = hp["xy"]
+        neighbors = []
+        for j, other in enumerate(hp_points):
+            if i == j:
+                continue
+            ox, oy = other["xy"]
+            dist = math.hypot(x - ox, y - oy)
+            if dist <= cluster_radius:
+                neighbors.append(other["base_rot"])
+        if neighbors:
+            hp["final_rot"] = mean(neighbors + [hp["base_rot"]])
+        else:
+            hp["final_rot"] = hp["base_rot"]
+    return hp_points
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
@@ -192,6 +211,13 @@ def draw_to_template(classified, template_path):
 
     cables = classified.get("DISTRIBUTION_CABLE", [])
 
+    # --- Seragamkan rotasi HP ---
+    hp_points = []
+    for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
+        if "xy" in obj:
+            hp_points.append(obj)
+    hp_points = unify_hp_rotations(hp_points, cables)
+
     # --- Gambar semua ---
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
@@ -206,7 +232,7 @@ def draw_to_template(classified, template_path):
             x, y = obj['xy']
             rotation = 0.0
             if layer_name in ["HP_COVER", "HP_UNCOVER"]:
-                rotation = nearest_cable_angle((x, y), cables)
+                rotation = obj.get("final_rot", 0.0)
 
             if layer_name == "HP_COVER":
                 msp.add_text(obj["name"], dxfattribs={
