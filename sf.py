@@ -229,21 +229,26 @@ def draw_to_template(classified, template_path):
                 except Exception as e:
                     print(f"Gagal insert block {block_name}: {e}")
 
-            if not inserted_block:
+                if not inserted_block:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
 
-            # hitung rotasi teks dari jalan terdekat
-            angle = nearest_road_angle(x, y, roads)
-            tx, ty = offset_point(x, y, angle, distance=4)
-
-            msp.add_text(obj["name"], dxfattribs={
-                "height": 5.0,
-                "layer": target_layer,
-                "insert": (tx, ty),
-                "rotation": angle
-            })
+                # hitung rotasi teks dari jalan terdekat
+                angle = nearest_road_angle(x, y, roads)
+            
+                # teks diposisikan sama persis dengan block
+                tx, ty = x, y
+            
+                # tambahkan teks label untuk semua object
+                if obj["name"]:
+                    msp.add_text(obj["name"], dxfattribs={
+                        "height": 5.0,
+                        "layer": target_layer,
+                        "insert": (tx, ty),
+                        "rotation": angle
+                    })
 
     return doc
+
 
 def run_sf():
     st.title("🏗️ KMZ ➝ DWG (Subset Folder)")
