@@ -26,9 +26,9 @@ def run_hpdb(HERE_API_KEY):
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
-    # ------------------------------
-    # Extract placemarks
-    # ------------------------------
+    # ------------------------------ #
+    # Extract placemarks from KMZ    #
+    # ------------------------------ #
     def extract_placemarks(kmz_bytes):
         def first_lonlat_from_pm(pm, ns):
             for xpath in [
@@ -240,44 +240,32 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = letter
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== COPY MAPPING PER FAT ID (2-2 ANCHORED ON ROWS WITH 'Line') ======
-        # Logic:
-        # - Untuk tiap FAT ID, cari baris yang memiliki value di kolom 'Line'
-        # - Setiap baris 'Line' act as anchor: mapping row ke-0 -> diaplikasikan ke anchor + baris berikutnya (2 baris)
-        # - Lanjutkan ke mapping row berikutnya untuk anchor selanjutnya
+        # ====== COPY MAPPING (tanpa baris kedua, Tube/Core auto) ======
         def is_filled(val):
             return not (pd.isna(val) or str(val).strip() == "")
 
-        if len(mapping_df) > 0:
-            for fat_id, group in df.groupby("FAT ID", sort=False):
-                if fat_id == "" or fat_id == "FAT_NOT_FOUND":
-                    continue
+        for fat_id, group in df.groupby("FAT ID", sort=False):
+            if fat_id == "" or fat_id == "FAT_NOT_FOUND":
+                continue
 
-                indices = list(group.index)
-                # baris anchor: baris dalam group yang mempunyai kolom 'Line' terisi
-                anchors = [idx for idx in indices if is_filled(df.at[idx, "Line"])]
+            indices = list(group.index)
+            anchors = [idx for idx in indices if is_filled(df.at[idx, "Line"])]
 
-                mapping_idx = 0
-                for anchor in anchors:
-                    # pastikan mapping_idx dalam range
-                    mapping_idx = min(mapping_idx, len(mapping_df) - 1)
-                    row_map = mapping_df.iloc[mapping_idx]
+            tray = 1
+            port = 1
+            tube = 1
+            core = 1
 
-                    # ambil posisi anchor di list indices -> supaya tahu baris berikutnya dalam FAT
-                    pos = indices.index(anchor)
-                    targets = [anchor]
-                    if pos + 1 < len(indices):
-                        targets.append(indices[pos + 1])  # baris setelah anchor
+            for anchor in anchors:
+                df.at[anchor, "FDT Tray (Front)"] = tray
+                df.at[anchor, "FDT Port"] = port
+                df.at[anchor, "Tube Colour"] = tube
+                df.at[anchor, "Core Number"] = core
 
-                    # terapkan mapping pada anchor dan baris setelahnya (jika ada)
-                    for t in targets:
-                        df.at[t, "FDT Tray (Front)"] = row_map["FDT Tray (Front)"]
-                        df.at[t, "FDT Port"] = row_map["FDT Port"]
-                        df.at[t, "Tube Colour"] = row_map["Tube Colour"]
-                        df.at[t, "Core Number"] = row_map["Core Number"]
-
-                    mapping_idx += 1  
-# lanjut ke mapping row berikutnya untuk anchor selanjutnya
+                core += 1
+                if core > 10:
+                    core = 1
+                    tube += 1
 
         progress.empty()
         st.success("✅ Selesai!")
@@ -285,4 +273,3 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
