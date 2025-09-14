@@ -121,15 +121,12 @@ def classify_items(items):
             classified["POLE"].append(it)
     return classified
 
-
 def segment_angle(p1, p2):
-    """Hitung sudut rotasi (derajat) antara dua titik garis"""
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
     return math.degrees(math.atan2(dy, dx))
 
 def longest_segment_angle(coords):
-    """Cari sudut dari segmen terpanjang dalam polyline"""
     max_len = 0
     angle = 0
     for i in range(len(coords) - 1):
@@ -141,45 +138,25 @@ def longest_segment_angle(coords):
             angle = segment_angle((x1, y1), (x2, y2))
     return angle
 
-def polyline_main_angle(line: LineString):
-    """Ambil sudut global polyline (berdasarkan segmen terpanjang)"""
-    coords = list(line.coords)
-    longest = 0
-    best_angle = 0
-    for i in range(len(coords) - 1):
-        p1, p2 = coords[i], coords[i + 1]
-        seg_len = LineString([p1, p2]).length
-        ang = segment_angle(p1, p2)
-        if seg_len > longest:
-            longest = seg_len
-            best_angle = ang
-    return best_angle
-
+def cluster_hp_rotation(hp_points, homepass_lines, cables):
+    if not hp_points:
+        return {}
+    # Cari arah utama (longest segment dari polyline terdekat)
+    base_angle = None
+    if homepass_lines:
+        base_line = max(homepass_lines, key=lambda l: l.length)
+        base_angle = longest_segment_angle(list(base_line.coords))
+    elif cables:
+        base_line = max([LineString(c['xy_path']) for c in cables if 'xy_path' in c], key=lambda l: l.length)
+        base_angle = longest_segment_angle(list(base_line.coords))
+    else:
+        base_angle = 0.0
+    # Semua HP di cluster pakai base_angle yang sama
+    return {id(pt): base_angle for pt in hp_points}
 
 def draw_to_template(classified, template_path):
     doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
-
-    matchprop_hp = matchprop_pole = matchprop_sr = None
-    matchblock_fat = matchblock_fdt = matchblock_pole = None
-
-    for e in msp:
-        if e.dxftype() == 'TEXT':
-            txt = e.dxf.text.upper()
-            if 'NN-' in txt:
-                matchprop_hp = e.dxf
-            elif 'MR.SRMRW16' in txt:
-                matchprop_pole = e.dxf
-            elif 'SRMRW16.067.B01' in txt:
-                matchprop_sr = e.dxf
-        elif e.dxftype() == 'INSERT':
-            name = e.dxf.name.upper()
-            if name == "FAT":
-                matchblock_fat = e.dxf
-            elif name == "FDT":
-                matchblock_fdt = e.dxf
-            elif name.startswith("A$"):
-                matchblock_pole = e.dxf
 
     # --- Kumpulkan semua koordinat ---
     all_xy = []
@@ -195,7 +172,6 @@ def draw_to_template(classified, template_path):
         return None
 
     shifted_all, (cx, cy) = apply_offset(all_xy)
-
     idx = 0
     for layer_name, cat_items in classified.items():
         for obj in cat_items:
@@ -208,17 +184,20 @@ def draw_to_template(classified, template_path):
 
     layer_mapping = {
         "BOUNDARY": "FAT AREA",
-        "DISTRIBUTION_CABLE": "FO 36 CORE",
+        "DISTRIBUTION_CABLE": "FO 36 CORE",  # default mapping
         "SLING_WIRE": "STRAND UG",
         "KOTAK": "GARIS HOMEPASS",
         "JALAN": "JALAN"
     }
 
-    # --- Simpan semua polyline GARIS HOMEPASS ---
     homepass_lines = []
     for obj in classified.get("KOTAK", []):
         if obj['type'] == 'path' and len(obj['xy_path']) >= 2:
             homepass_lines.append(LineString(obj['xy_path']))
+
+    cables = classified.get("DISTRIBUTION_CABLE", [])
+    hp_points = classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", [])
+    rotation_map = cluster_hp_rotation(hp_points, homepass_lines, cables)
 
     # --- Gambar objek ---
     for layer_name, cat_items in classified.items():
@@ -232,15 +211,9 @@ def draw_to_template(classified, template_path):
                 continue
 
             x, y = obj['xy']
+            rotation = rotation_map.get(id(obj), 0.0)
 
-            # --- HP COVER ---
             if layer_name == "HP_COVER":
-                rotation = 0.0
-                if homepass_lines:
-                    hp_point = Point(x, y)
-                    nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
-                    rotation = polyline_main_angle(nearest_line)
-
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 6,
                     "layer": "FEATURE_LABEL",
@@ -250,14 +223,7 @@ def draw_to_template(classified, template_path):
                 })
                 continue
 
-            # --- HP UNCOVER ---
             elif layer_name == "HP_UNCOVER":
-                rotation = 0.0
-                if homepass_lines:
-                    hp_point = Point(x, y)
-                    nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
-                    rotation = polyline_main_angle(nearest_line)
-
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 3.0,
                     "layer": "FEATURE_LABEL",
@@ -267,78 +233,19 @@ def draw_to_template(classified, template_path):
                 })
                 continue
 
-            # --- Lainnya (FAT, FDT, POLE, dsb) ---
-            block_name = None
-            matchblock = None
-
-            if layer_name == "FAT":
-                block_name = "FAT"
-                matchblock = matchblock_fat
-            elif layer_name == "FDT":
-                block_name = "FDT"
-                matchblock = matchblock_fdt
-            elif layer_name == "NEW_POLE":
-                block_name = "A$C14dd5346"
-                matchblock = matchblock_pole
-            elif layer_name == "EXISTING_POLE":
-                block_name = "A$Cdb6fd7d1" if obj['folder'] in [
-                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
-                ] else "A$C14dd5346"
-                matchblock = matchblock_pole
-
-            inserted_block = False
-            if block_name:
-                try:
-                    scale_x = getattr(matchblock, "xscale", 1.0)
-                    scale_y = getattr(matchblock, "yscale", 1.0)
-                    scale_z = getattr(matchblock, "zscale", 1.0)
-                    if layer_name == "FDT":
-                        scale_x = scale_y = scale_z = 0.0025
-                    msp.add_blockref(
-                        name=block_name,
-                        insert=(x, y),
-                        dxfattribs={
-                            "layer": true_layer,
-                            "xscale": scale_x,
-                            "yscale": scale_y,
-                            "zscale": scale_z,
-                        }
-                    )
-                    inserted_block = True
-                except Exception as e:
-                    print(f"Gagal insert block {block_name}: {e}")
-
-            if not inserted_block:
-                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-
-            # Tambah teks untuk FDT/FAT/POLE
-            if layer_name != "FDT":
-                text_layer = "FEATURE_LABEL" if obj['folder'] in [
-                    "NEW POLE 7-3", "NEW POLE 7-4", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
-                ] else true_layer
-
-                text_color = 1 if text_layer == "FEATURE_LABEL" else 256
-                text_height = 3.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5
-
-                msp.add_text(obj["name"], dxfattribs={
-                    "height": text_height,
-                    "layer": text_layer,
-                    "color": text_color,
-                    "insert": (x + 2, y)
-                })
+            # fallback lain untuk FAT/FDT/POLE
+            msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+            msp.add_text(obj["name"], dxfattribs={
+                "height": 3.0,
+                "layer": "FEATURE_LABEL",
+                "color": 1,
+                "insert": (x + 2, y)
+            })
 
     return doc
 
-
 def run_kmz_to_dwg():
     st.title("🏗️ KMZ → AUTOCAD ")
-    st.markdown("""
-<h2>👋 Hai, <span style='color:#0A84FF'>bro</span></h2>
-✅ <span style='font-weight:bold;'>CATATAN PENTING :</span><br>
-1️⃣ <span style='color:#FF6B6B;'>PASTIKAN KMZ SESUAI TEMPLATE</span>.<br>
-2️⃣ FOLDER KOTAK HARUS DIBUAT MANUAL DULU DARI DALAM KMZ <code>Agar kotak rumah otoatis didalam kode</code><br><br>
-""", unsafe_allow_html=True)
-               
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
     uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
