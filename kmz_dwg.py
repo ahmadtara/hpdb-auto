@@ -6,7 +6,6 @@ import ezdxf
 from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
-from shapely.ops import nearest_points
 from statistics import mean
 
 # ----------------------------
@@ -146,6 +145,7 @@ def segment_angle_xy(p1, p2):
 # Cable helpers
 # ----------------------------
 def build_cable_lines(classified):
+    from shapely.ops import nearest_points  # lazy import
     cables = []
     for item in classified.get("DISTRIBUTION_CABLE", []):
         if item['type'] != 'path' or not item.get('coords'):
@@ -235,8 +235,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         doc = ezdxf.new('R2010')
     msp = doc.modelspace()
 
-    # --- detect block references automatically ---
+    # --- detect block references ---
     matchblock_fat = matchblock_fdt = matchblock_pole = None
+
+    # cek di modelspace
     for e in msp:
         if e.dxftype() == "INSERT":
             name = e.dxf.name.upper()
@@ -246,6 +248,16 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 matchblock_fdt = e
             elif "POLE" in name or name.startswith("A$"):
                 matchblock_pole = e
+
+    # cek juga di block definition
+    for b in doc.blocks:
+        bname = b.name.upper()
+        if not matchblock_fat and "FAT" in bname:
+            matchblock_fat = b
+        if not matchblock_fdt and "FDT" in bname:
+            matchblock_fdt = b
+        if not matchblock_pole and "POLE" in bname:
+            matchblock_pole = b
 
     # shift coords
     all_xy = []
@@ -309,7 +321,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-        # draw points (FAT/FDT/POLE)
+    # draw points (FAT/FDT/POLE)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -320,16 +332,14 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             x, y = obj['xy']
             block_name = None
             if layer_name == "FAT" and matchblock_fat:
-                block_name = matchblock_fat.dxf.name
+                block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
             elif layer_name == "FDT" and matchblock_fdt:
-                block_name = matchblock_fdt.dxf.name
+                block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
             elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
-                block_name = matchblock_pole.dxf.name
+                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
 
-            inserted = False
             if block_name:
                 try:
-                    # --- scale manual ---
                     scale = 1.0
                     if layer_name == "FDT":
                         scale = 0.0025
@@ -347,23 +357,22 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                             "zscale": scale
                         }
                     )
-                    inserted = True
-                except:
-                    inserted = False
-
-            if not inserted:
+                except Exception as e:
+                    st.warning(f"Gagal insert block {block_name}: {e}")
+            else:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-                text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
-                msp.add_text(
-                    obj.get("name", ""),
-                    dxfattribs={
-                        "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
-                        "layer": text_layer,
-                        "color": 1 if text_layer == "FEATURE_LABEL" else 256,
-                        "insert": (x + 2, y)
-                    }
-                )
 
+            # --- teks SELALU ditambahkan ---
+            text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
+            msp.add_text(
+                obj.get("name", ""),
+                dxfattribs={
+                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
+                    "layer": text_layer,
+                    "color": 1 if text_layer == "FEATURE_LABEL" else 256,
+                    "insert": (x + 2, y)
+                }
+            )
 
     # draw HP
     for hp in hp_items:
@@ -411,4 +420,3 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
