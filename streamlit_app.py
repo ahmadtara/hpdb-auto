@@ -87,9 +87,10 @@ else:
     menu = st.sidebar.radio("📌 Menu", [
         "KMZ → HPDB",
         "KML → Jalan",
-        "KMZ → DWG",  # ✅ Tambahkan menu baru
-        "KMZ → BOQ",  # ✅ Tambahan menu baru
-        "KMZ → DWG SF",  # ✅ Tambahan menu baru
+        "KMZ → DWG",
+        "KMZ → BOQ",
+        "KMZ → DWG SF",
+        "Urutkan Pole & HP",  # ✅ Tambahan menu baru
         "Logout"
     ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
@@ -104,10 +105,21 @@ else:
         run_boq()
     elif menu == "KMZ → DWG SF":
         run_sf()
+    elif menu == "Urutkan Pole & HP":
+        # ✅ Buka langsung di tab baru
+        st.markdown(
+            """
+            <script>
+                window.open("https://urutkanpole-kingdion.streamlit.app/", "_blank").focus();
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
