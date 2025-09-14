@@ -133,6 +133,21 @@ def segment_angle(p1, p2):
         ang -= 180
     return ang
 
+def polyline_main_angle(line: LineString):
+    """Ambil sudut global polyline (berdasarkan segmen terpanjang)"""
+    coords = list(line.coords)
+    longest = 0
+    best_angle = 0
+    for i in range(len(coords) - 1):
+        p1, p2 = coords[i], coords[i + 1]
+        seg_len = LineString([p1, p2]).length
+        ang = segment_angle(p1, p2)
+        if seg_len > longest:
+            longest = seg_len
+            best_angle = ang
+    return best_angle
+
+
 def nearest_segment_angle(line: LineString, point: Point):
     """Cari segmen terdekat ke titik, lalu ambil sudut segmen itu"""
     coords = list(line.coords)
@@ -205,12 +220,13 @@ def draw_to_template(classified, template_path):
             x, y = obj['xy']
 
             # --- HP COVER ---
-            if layer_name == "HP_COVER":
+        
                 rotation = 0.0
-                if homepass_lines:
-                    hp_point = Point(x, y)
-                    nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
-                    rotation = nearest_segment_angle(nearest_line, hp_point)
+            if homepass_lines:
+                hp_point = Point(x, y)
+                nearest_line = min(homepass_lines, key=lambda l: l.distance(hp_point))
+                rotation = polyline_main_angle(nearest_line)
+
 
                 msp.add_text(obj["name"], dxfattribs={
                     "height": 6,
@@ -278,3 +294,4 @@ def run_kmz_to_dwg():
                         st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
             except Exception as e:
                 st.error(f"❌ Gagal memproses: {e}")
+
