@@ -238,7 +238,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     # --- detect block references ---
     matchblock_fat = matchblock_fdt = matchblock_pole = None
 
-    # cek di modelspace
     for e in msp:
         if e.dxftype() == "INSERT":
             name = e.dxf.name.upper()
@@ -249,7 +248,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             elif "POLE" in name or name.startswith("A$"):
                 matchblock_pole = e
 
-    # cek juga di block definition
     for b in doc.blocks:
         bname = b.name.upper()
         if not matchblock_fat and "FAT" in bname:
@@ -259,7 +257,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         if not matchblock_pole and "POLE" in bname:
             matchblock_pole = b
 
-    # shift coords
     all_xy = []
     for _, cat_items in classified.items():
         for obj in cat_items:
@@ -279,7 +276,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             elif obj['type'] == 'path':
                 obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]; idx += len(obj['coords'])
 
-    # mapping
     layer_mapping = {
         "BOUNDARY": "FAT AREA",
         "DISTRIBUTION_CABLE": "FO 36 CORE",
@@ -311,7 +307,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     best_angle = nearest_segment_angle_with_minlen(hp['xy'], c['line'], min_seg_len)
             hp['rotation'] = best_angle
 
-    # draw polylines
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
@@ -321,7 +316,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-    # draw points (FAT/FDT/POLE)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -362,7 +356,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             else:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
-            # --- teks SELALU ditambahkan ---
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
             msp.add_text(
                 obj.get("name", ""),
@@ -417,16 +410,11 @@ def run_kmz_to_dwg():
         try:
             result=build_dxf_with_smart_hp(classified,template_path,output_dxf,
                                            min_seg_len=min_seg_len,max_gap_along=max_gap_along)
-            if result and os.path.exists(result):
-                st.success("✅ DXF berhasil dibuat.")
+            if result:
                 with open(result,"rb") as f:
-                    st.download_button("⬇️ Download DXF",f,file_name=os.path.basename(result))
-            else: st.error("❌ Gagal membuat DXF.")
+                    st.download_button("⬇️ Download DXF",data=f,file_name="converted.dxf")
         except Exception as e:
             st.error(f"❌ Error: {e}")
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
-
-
