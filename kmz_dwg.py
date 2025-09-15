@@ -375,10 +375,18 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         rot = hp['rotation']
         name = hp['obj'].get("name", "")
     
-        # ukuran & warna
+        # Tinggi huruf
         h = 4 if "HP COVER" in hp['obj']['folder'] else 3
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
     
+        # Perkiraan lebar teks (dalam meter di DXF)
+        text_width = len(name) * h * 0.6  
+    
+        # Hitung offset agar teks center di titik HP
+        dx = - (text_width / 2) * math.cos(math.radians(rot))
+        dy = - (text_width / 2) * math.sin(math.radians(rot))
+    
+        # Tambahkan teks
         mtext = msp.add_mtext(
             name,
             dxfattribs={
@@ -389,22 +397,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             }
         )
     
-        # --- hitung offset manual agar teks center ---
-        # lebar kira2 = panjang teks × tinggi font × factor (≈0.6 untuk font default)
-        text_width = len(name) * h * 0.6  
-        text_height = h
-    
-        dx = text_width / 2.0
-        dy = text_height / 2.0
-    
-        # rotasi offset ke arah sudut 'rot'
-        rad = math.radians(rot)
-        ox = dx * math.cos(rad) - dy * math.sin(rad)
-        oy = dx * math.sin(rad) + dy * math.cos(rad)
-    
-        # posisi akhir: titik HP - offset
-        mtext.set_location((x - ox, y - oy))
-        mtext.dxf.attachment_point = 5  # middle center
+        # Posisi dipaksa ke tengah
+        mtext.set_location((x + dx, y + dy))
 
 
 
@@ -444,6 +438,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
