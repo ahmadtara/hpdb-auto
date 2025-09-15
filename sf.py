@@ -5,34 +5,26 @@ from xml.etree import ElementTree as ET
 import ezdxf
 from pyproj import Transformer
 import math
-from shapely.geometry import Point, LineString
-from statistics import mean
 
-# ----------------------------
-# Config / Transformer
-# ----------------------------
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
-# folders yang ingin diproses (sesuai KMZ)
+# hanya folder yang dipakai
 target_folders = {
-    'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
-    'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
-    'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
+    'FDT', 'NEW POLE 7-4', 'NEW POLE 9-4', 'EXISTING POLE EMR 7-4',
+    'EXISTING POLE EMR 9-4', 'CABLE',
+    'JOINT CLOSURE', 'SLACK HANGER', 'JALAN'
 }
 
-# ----------------------------
-# KML / KMZ parsing
-# ----------------------------
+# mapping folder ➝ layer CAD
+layer_mapping = {
+    "CABLE": "FO 36 CORE",
+    "JALAN": "JALAN",
+}
+
 def extract_kmz(kmz_path, extract_dir):
     with zipfile.ZipFile(kmz_path, 'r') as kmz_file:
         kmz_file.extractall(extract_dir)
-    # coba temukan file kml (bisa bernama doc.kml atau lain)
-    for root, dirs, files in os.walk(extract_dir):
-        for fn in files:
-            if fn.lower().endswith('.kml'):
-                return os.path.join(root, fn)
-    return None
-
+    return os.path.join(extract_dir, "doc.kml")
 
 def parse_kml(kml_path):
     ns = {'kml': 'http://www.opengis.net/kml/2.2'}
@@ -48,13 +40,14 @@ def parse_kml(kml_path):
         folder_name = folder_name_tag.text.strip().upper()
         if folder_name not in target_folders:
             continue
+
         placemarks = folder.findall('.//kml:Placemark', ns)
         for pm in placemarks:
             name = pm.find('kml:name', ns)
             name_text = name.text.strip() if name is not None else ""
 
             point_coord = pm.find('.//kml:Point/kml:coordinates', ns)
-            if point_coord is not None and point_coord.text and point_coord.text.strip():
+            if point_coord is not None:
                 lon, lat, *_ = point_coord.text.strip().split(',')
                 items.append({
                     'type': 'point',
@@ -66,7 +59,7 @@ def parse_kml(kml_path):
                 continue
 
             line_coord = pm.find('.//kml:LineString/kml:coordinates', ns)
-            if line_coord is not None and line_coord.text and line_coord.text.strip():
+            if line_coord is not None:
                 coords = []
                 for c in line_coord.text.strip().split():
                     lon, lat, *_ = c.split(',')
@@ -80,7 +73,7 @@ def parse_kml(kml_path):
                 continue
 
             poly_coord = pm.find('.//kml:Polygon//kml:coordinates', ns)
-            if poly_coord is not None and poly_coord.text and poly_coord.text.strip():
+            if poly_coord is not None:
                 coords = []
                 for c in poly_coord.text.strip().split():
                     lon, lat, *_ = c.split(',')
@@ -93,14 +86,8 @@ def parse_kml(kml_path):
                 })
     return items
 
-# ----------------------------
-# Utilities
-# ----------------------------
-
 def latlon_to_xy(lat, lon):
-    # transformer expects (lon, lat) when always_xy=True
     return transformer.transform(lon, lat)
-
 
 def apply_offset(points_xy):
     xs = [x for x, y in points_xy]
@@ -108,56 +95,33 @@ def apply_offset(points_xy):
     cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
     return [(x - cx, y - cy) for x, y in points_xy], (cx, cy)
 
-
 def classify_items(items):
-    classified = {name: [] for name in [
-        "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
-        "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
-    ]}
+    classified = {
+        "FDT": [], "NEW_POLE_74": [], "NEW_POLE_94": [],
+        "EXISTING_POLE": [], "CABLE": [], "CLOSURE": [],
+        "COIL": [], "JALAN": []
+    }
     for it in items:
         folder = it['folder']
-        if "FDT" in folder:
+        if folder == "FDT":
             classified["FDT"].append(it)
-        elif "FAT" in folder and folder != "FAT AREA":
-            classified["FAT"].append(it)
-        elif "HP COVER" in folder:
-            classified["HP_COVER"].append(it)
-        elif "HP UNCOVER" in folder:
-            classified["HP_UNCOVER"].append(it)
-        elif "NEW POLE" in folder:
-            classified["NEW_POLE"].append(it)
-        elif "EXISTING" in folder or "EMR" in folder:
+        elif folder == "NEW POLE 7-4":
+            classified["NEW_POLE_74"].append(it)
+        elif folder == "NEW POLE 9-4":
+            classified["NEW_POLE_94"].append(it)
+        elif "EXISTING POLE EMR" in folder:
             classified["EXISTING_POLE"].append(it)
-        elif "BOUNDARY" in folder:
-            classified["BOUNDARY"].append(it)
-        elif "DISTRIBUTION CABLE" in folder:
-            classified["DISTRIBUTION_CABLE"].append(it)
-        elif "SLING WIRE" in folder:
-            classified["SLING_WIRE"].append(it)
-        elif "KOTAK" in folder:
-            classified["KOTAK"].append(it)
-        elif "JALAN" in folder:
+        elif folder == "CABLE":
+            classified["CABLE"].append(it)
+        elif folder == "JOINT CLOSURE":
+            classified["CLOSURE"].append(it)
+        elif folder == "SLACK HANGER":
+            classified["COIL"].append(it)
+        elif folder == "JALAN":
             classified["JALAN"].append(it)
-        else:
-            classified["POLE"].append(it)
     return classified
 
-
-def segment_angle_xy(p1, p2):
-    dx = p2[0] - p1[0]
-    dy = p2[1] - p1[1]
-    ang = math.degrees(math.atan2(dy, dx))
-    # normalisasi ke rentang (-180, 180]
-    if ang <= -180:
-        ang += 360
-    if ang > 180:
-        ang -= 360
-    return ang
-
-# ----------------------------
-# Cari sudut jalan terdekat
-# ----------------------------
-
+# cari sudut jalan terdekat untuk rotasi teks
 def nearest_road_angle(x, y, roads):
     min_dist = float("inf")
     best_angle = 0
@@ -166,13 +130,12 @@ def nearest_road_angle(x, y, roads):
         for i in range(len(path) - 1):
             x1, y1 = path[i]
             x2, y2 = path[i + 1]
-            # vector segmen
+            # jarak titik ke segmen garis
             px = x2 - x1
             py = y2 - y1
             norm = px*px + py*py
             if norm == 0:
                 continue
-            # proyeksi titik ke segmen (parameter u)
             u = max(0, min(1, ((x - x1) * px + (y - y1) * py) / norm))
             dx = x1 + u * px - x
             dy = y1 + u * py - y
@@ -182,313 +145,135 @@ def nearest_road_angle(x, y, roads):
                 best_angle = math.degrees(math.atan2(py, px))
     return best_angle
 
-# ----------------------------
-# Cable helpers
-# ----------------------------
+# geser posisi teks supaya gak nabrak
+def offset_point(x, y, angle, distance=3):
+    rad = math.radians(angle + 90)  # geser tegak lurus
+    return (x + distance * math.cos(rad), y + distance * math.sin(rad))
 
-def build_cable_lines(classified):
-    from shapely.ops import nearest_points  # lazy import
-    cables = []
-    for item in classified.get("DISTRIBUTION_CABLE", []):
-        if item['type'] != 'path' or not item.get('coords'):
-            continue
-        xy = [latlon_to_xy(lat, lon) for lat, lon in item['coords']]
-        if len(xy) >= 2:
-            cables.append({'orig': item, 'xy_path': xy, 'line': LineString(xy)})
-    return cables
-
-
-def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len):
-    coords = list(cable_line.coords)
-    px, py = pt_xy
-    best_dist = float("inf")
-    best_angle = None
-    for i in range(len(coords) - 1):
-        p1, p2 = coords[i], coords[i+1]
-        seg = LineString([p1, p2])
-        seg_len = seg.length
-        if seg_len < min_seg_len:
-            continue
-        dist = seg.distance(Point(px, py))
-        if dist < best_dist:
-            best_dist = dist
-            best_angle = segment_angle_xy(p1, p2)
-    if best_angle is not None:
-        return best_angle
-    # fallback: tanpa min seg len
-    best_dist = float("inf")
-    for i in range(len(coords) - 1):
-        p1, p2 = coords[i], coords[i+1]
-        seg = LineString([p1, p2])
-        dist = seg.distance(Point(px, py))
-        if dist < best_dist:
-            best_dist = dist
-            best_angle = segment_angle_xy(p1, p2)
-    return best_angle if best_angle is not None else 0.0
-
-# ----------------------------
-# Group HP
-# ----------------------------
-
-def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
-    per_cable_hp = {i: [] for i in range(len(cables))}
-    hp_meta = []
-    for idx, hp in enumerate(hp_xy_list):
-        pt = Point(hp['xy'])
-        best_c = None
-        best_dist = float("inf")
-        best_along = None
-        for c_idx, c in enumerate(cables):
-            line = c['line']
-            d = line.distance(pt)
-            if d < best_dist:
-                best_dist = d
-                best_c = c_idx
-                best_along = line.project(pt)
-        if best_c is None:
-            best_c, best_along = 0, 0.0
-        per_cable_hp[best_c].append((idx, best_along))
-        hp_meta.append({'cable_idx': best_c, 'along': best_along, 'dist_to_cable': best_dist})
-
-    groups = []
-    for c_idx, hp_list in per_cable_hp.items():
-        if not hp_list: continue
-        hp_list.sort(key=lambda x: x[1])
-        current_group = [hp_list[0][0]]
-        last_along = hp_list[0][1]
-        group_alongs = [last_along]
-        for idx_i, along_i in hp_list[1:]:
-            if abs(along_i - last_along) > max_gap_along:
-                groups.append({'cable_idx': c_idx,'indices': current_group.copy(),'along_vals': group_alongs.copy()})
-                current_group = [idx_i]
-                group_alongs = [along_i]
-            else:
-                current_group.append(idx_i)
-                group_alongs.append(along_i)
-            last_along = along_i
-        groups.append({'cable_idx': c_idx,'indices': current_group.copy(),'along_vals': group_alongs.copy()})
-    return groups, hp_meta
-
-# ----------------------------
-# Main DXF builder
-# ----------------------------
-
-def build_dxf_with_smart_hp(classified, template_path, output_path,
-                            min_seg_len=15.0, max_gap_along=20.0, rotate_labels_by_road=True):
-    # load or buat dokumen baru
-    if template_path and os.path.exists(template_path):
-        doc = ezdxf.readfile(template_path)
-    else:
-        doc = ezdxf.new('R2010')
+def draw_to_template(classified, template_path):
+    doc = ezdxf.readfile(template_path)
     msp = doc.modelspace()
 
-    # --- detect block references ---
-    matchblock_fat = matchblock_fdt = matchblock_pole = None
-    for e in msp:
-        try:
-            if e.dxftype() == "INSERT":
-                name = e.dxf.name.upper()
-                if "FAT" in name:
-                    matchblock_fat = e
-                elif "FDT" in name:
-                    matchblock_fdt = e
-                elif "POLE" in name or name.startswith("A$"):
-                    matchblock_pole = e
-        except Exception:
-            continue
-    for b in doc.blocks:
-        bname = b.name.upper()
-        if not matchblock_fat and "FAT" in bname:
-            matchblock_fat = b
-        if not matchblock_fdt and "FDT" in bname:
-            matchblock_fdt = b
-        if not matchblock_pole and "POLE" in bname:
-            matchblock_pole = b
-
-    # shift coords (agar origin tidak terlalu besar)
+    # kumpulkan koordinat
     all_xy = []
-    for _, cat_items in classified.items():
+    for cat_items in classified.values():
         for obj in cat_items:
             if obj['type'] == 'point':
                 all_xy.append(latlon_to_xy(obj['latitude'], obj['longitude']))
             elif obj['type'] == 'path':
                 all_xy.extend([latlon_to_xy(lat, lon) for lat, lon in obj['coords']])
+
     if not all_xy:
-        st.error("❌ Tidak ada data dari KMZ !")
+        st.error("❌ Tidak ada data dari KMZ!")
         return None
-    shifted_all, _ = apply_offset(all_xy)
+
+    shifted_all, (cx, cy) = apply_offset(all_xy)
+
     idx = 0
-    for _, cat_items in classified.items():
+    for cat_items in classified.values():
         for obj in cat_items:
             if obj['type'] == 'point':
-                obj['xy'] = shifted_all[idx]; idx += 1
+                obj['xy'] = shifted_all[idx]
+                idx += 1
             elif obj['type'] == 'path':
-                obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]; idx += len(obj['coords'])
+                obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]
+                idx += len(obj['coords'])
 
-    # mapping layer
-    layer_mapping = {
-        "BOUNDARY": "FAT AREA",
-        "DISTRIBUTION_CABLE": "FO 36 CORE",
-        "SLING_WIRE": "STRAND UG",
-        "KOTAK": "GARIS HOMEPASS",
-        "JALAN": "JALAN"
-    }
+    roads = classified.get("JALAN", [])
 
-    # build cable list untuk rotasi HP
-    cables = build_cable_lines(classified)
-    hp_items = []
-    for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
-        if 'xy' in obj: hp_items.append({'obj': obj, 'xy': obj['xy']})
-
-    # group HP menurut cable
-    groups, hp_meta = group_hp_by_cable_and_along(hp_items, cables, max_gap_along=max_gap_along)
-    for g_idx, group in enumerate(groups):
-        if not cables: continue
-        c_idx = group['cable_idx']; line = cables[c_idx]['line']
-        rep_along = sorted(group['along_vals'])[len(group['along_vals'])//2]
-        rep_point = line.interpolate(rep_along)
-        angle = nearest_segment_angle_with_minlen((rep_point.x, rep_point.y), line, min_seg_len)
-        for hp_idx in group['indices']:
-            hp_items[hp_idx]['rotation'] = angle
-    for hp in hp_items:
-        if 'rotation' not in hp:
-            best_angle, best_dist = 0.0, float("inf")
-            for c in cables:
-                dist = c['line'].distance(Point(hp['xy']))
-                if dist < best_dist:
-                    best_dist = dist
-                    best_angle = nearest_segment_angle_with_minlen(hp['xy'], c['line'], min_seg_len)
-            hp['rotation'] = best_angle
-
-    # kumpulan jalan (untuk rotasi teks)
-    roads = []
-    for obj in classified.get("JALAN", []):
-        if obj['type'] == "path" and "xy_path" in obj:
-            roads.append(obj)
-
-    # draw polylines
+    # mapping folder ke block/layer
     for layer_name, cat_items in classified.items():
-        true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
-            if obj['type'] == "path":
-                if len(obj.get('xy_path', [])) >= 2:
-                    msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                elif len(obj.get('xy_path', [])) == 1:
-                    msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
+            target_layer = layer_mapping.get(layer_name, layer_name)
 
-    # draw points (FAT/FDT/POLE etc.)
-    for layer_name, cat_items in classified.items():
-        true_layer = layer_mapping.get(layer_name, layer_name)
-        if layer_name in ("HP_COVER", "HP_UNCOVER"):
-            continue
-        for obj in cat_items:
-            if obj['type'] != "point":
+            if obj['type'] == 'path':
+                msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": target_layer})
                 continue
+
             x, y = obj['xy']
             block_name = None
-            if layer_name == "FAT" and matchblock_fat:
-                block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
-            elif layer_name == "FDT" and matchblock_fdt:
-                block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
-            elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
-                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
+            scale_x = scale_y = scale_z = 1.0
 
+            if layer_name == "FDT":
+                block_name = "FDT"
+                scale_x = scale_y = scale_z = 0.0025
+            elif layer_name == "NEW_POLE_74":
+                block_name = "A$C14dd5346"
+            elif layer_name == "NEW_POLE_94":
+                block_name = "np9"
+            elif layer_name == "EXISTING_POLE":
+                block_name = "A$Cdb6fd7d1" if obj['folder'] in [
+                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
+                ] else "A$C14dd5346"
+            elif layer_name == "CLOSURE":
+                block_name = "CLOSURE"
+                scale_x = scale_y = scale_z = 0.0030
+            elif layer_name == "COIL":
+                block_name = "COIL"
+                scale_x = scale_y = scale_z = 0.0030
+
+            inserted_block = False
             if block_name:
                 try:
-                    scale = 1.0
-                    if layer_name == "FDT":
-                        scale = 0.0025
-                    elif layer_name == "FAT":
-                        scale = 0.0025
-                    elif "POLE" in layer_name:
-                        scale = 1.0
                     msp.add_blockref(
-                        block_name, (x, y),
+                        name=block_name,
+                        insert=(x, y),
                         dxfattribs={
-                            "layer": true_layer,
-                            "xscale": scale,
-                            "yscale": scale,
-                            "zscale": scale
+                            "layer": target_layer,
+                            "xscale": scale_x,
+                            "yscale": scale_y,
+                            "zscale": scale_z,
                         }
                     )
+                    inserted_block = True
                 except Exception as e:
-                    st.warning(f"Gagal insert block {block_name}: {e}")
-            else:
-                msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+                    print(f"Gagal insert block {block_name}: {e}")
 
-            # --- teks SELALU ditambahkan ---
-            text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
-            angle = 0.0
-            if rotate_labels_by_road and roads:
+                if not inserted_block:
+                    msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": target_layer})
+
+                # hitung rotasi teks dari jalan terdekat
                 angle = nearest_road_angle(x, y, roads)
-
-            if obj.get("name", ""):
-                msp.add_text(
-                    obj["name"],
-                    dxfattribs={
-                        "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
-                        "layer": text_layer,
-                        "color": 1 if text_layer == "FEATURE_LABEL" else 256,
-                        "insert": (x + 2, y),
+            
+                # teks diposisikan sama persis dengan block
+                tx, ty = x, y
+            
+                # tambahkan teks label untuk semua object
+                if obj["name"]:
+                    msp.add_text(obj["name"], dxfattribs={
+                        "height": 5.0,
+                        "layer": target_layer,
+                        "insert": (tx, ty),
                         "rotation": angle
-                    }
-                )
+                    })
 
-    # draw HP labels (rotasi berdasarkan kabel)
-    for hp in hp_items:
-        x, y = hp['xy']; rot = hp.get('rotation', 0.0); name = hp['obj'].get('name', '')
-        if "HP COVER" in hp['obj']['folder']:
-            msp.add_text(name, dxfattribs={"height": 6, "layer": "FEATURE_LABEL", "color": 6, "insert": (x, y), "rotation": rot})
-        else:
-            msp.add_text(name, dxfattribs={"height": 3, "layer": "FEATURE_LABEL", "color": 7, "insert": (x, y), "rotation": rot})
+    return doc
 
-    # simpan file
-    doc.saveas(output_path)
-    return output_path
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-
-def run_kmz_to_dwg():
-    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation + block insertion)")
+def run_sf():
+    st.title("🏗️ KMZ ➝ DWG (Subset Folder)")
     uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
-    uploaded_template = st.file_uploader("📀 Upload Template DXF (optional)", type=["dxf"])
+    uploaded_template = st.file_uploader("📀 Upload Template DXF", type=["dxf"])
 
-    st.sidebar.header("Rotation parameters")
-    min_seg_len = st.sidebar.slider("Min seg length (m)", 5.0, 100.0, 15.0, 1.0)
-    max_gap_along = st.sidebar.slider("Max gap along (m)", 5.0, 200.0, 20.0, 1.0)
-    rotate_labels_by_road = st.sidebar.checkbox("Rotate point labels by nearest road direction", value=True)
-
-    if uploaded_kmz:
-        extract_dir = "temp_kmz"; os.makedirs(extract_dir, exist_ok=True)
-        with open("temp_upload.kmz", "wb") as f: f.write(uploaded_kmz.read())
-        kml_path = extract_kmz("temp_upload.kmz", extract_dir)
-        if not kml_path:
-            st.error("❌ Gagal menemukan file KML di KMZ")
-            return
-        items = parse_kml(kml_path)
-        classified = classify_items(items)
-
-        template_path = "template_ref.dxf"
-        if uploaded_template:
-            with open(template_path, "wb") as f: f.write(uploaded_template.read())
-        else:
-            template_path = template_path if os.path.exists(template_path) else ""
-
+    if uploaded_kmz and uploaded_template:
+        extract_dir = "temp_kmz"
+        os.makedirs(extract_dir, exist_ok=True)
         output_dxf = "converted_output.dxf"
-        try:
-            result = build_dxf_with_smart_hp(classified, template_path, output_dxf,
-                                             min_seg_len=min_seg_len, max_gap_along=max_gap_along,
-                                             rotate_labels_by_road=rotate_labels_by_road)
-            if result and os.path.exists(result):
-                st.success("✅ DXF berhasil dibuat.")
-                with open(result, "rb") as f:
-                    st.download_button("⬇️ Download DXF", f, file_name=os.path.basename(result))
-            else:
-                st.error("❌ Gagal membuat DXF.")
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
 
-if __name__ == "__main__":
-    run_kmz_to_dwg()
+        with open("template_ref.dxf", "wb") as f:
+            f.write(uploaded_template.read())
+
+        with st.spinner("🔍 Memproses data..."):
+            try:
+                kml_path = extract_kmz(uploaded_kmz, extract_dir)
+                items = parse_kml(kml_path)
+                classified = classify_items(items)
+                updated_doc = draw_to_template(classified, "template_ref.dxf")
+                if updated_doc:
+                    updated_doc.saveas(output_dxf)
+                if os.path.exists(output_dxf):
+                    st.success("✅ Konversi berhasil! DXF sudah dibuat.")
+                    with open(output_dxf, "rb") as f:
+                        st.download_button("⬇️ Download DXF", f, file_name="output_from_kmz.dxf")
+            except Exception as e:
+                st.error(f"❌ Gagal memproses: {e}")
