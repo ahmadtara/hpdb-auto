@@ -398,7 +398,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 "rotation": rot_deg,
             }
         )
-        text.set_pos((x + dx, y + dy), align="LEFT")
+        text.set_pos((x, y), align="MIDDLE_CENTER")
+
 
     doc.saveas(output_path)
     return output_path
@@ -413,7 +414,7 @@ def run_kmz_to_dwg():
     st.sidebar.header("Rotation parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
-    rotate_hp=st.sidebar.checkbox("Rotate HP Text",value=True)
+    rotate_hp = st.checkbox("Rotate HP Text", value=True)
 
     if uploaded_kmz:
         tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
@@ -440,3 +441,4 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
