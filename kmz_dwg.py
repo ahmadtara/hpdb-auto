@@ -7,7 +7,6 @@ from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
 from statistics import mean
-from ezdxf.enums import TextEntityAlignment
 
 # ----------------------------
 # Config / Transformer
@@ -146,7 +145,7 @@ def segment_angle_xy(p1, p2):
 # Cable helpers
 # ----------------------------
 def build_cable_lines(classified):
-    from shapely.ops import nearest_points  # lazy import
+    from shapely.ops import nearest_points
     cables = []
     for item in classified.get("DISTRIBUTION_CABLE", []):
         if item['type'] != 'path' or not item.get('coords'):
@@ -229,7 +228,8 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # Main DXF builder
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
-                            min_seg_len=15.0, max_gap_along=20.0):
+                            min_seg_len=15.0, max_gap_along=20.0,
+                            rotate_hp=True):
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
     else:
@@ -308,6 +308,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     best_angle = nearest_segment_angle_with_minlen(hp['xy'], c['line'], min_seg_len)
             hp['rotation'] = best_angle
 
+    # Gambar polyline & block lain
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
@@ -358,6 +359,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
+            color_val = 2 if layer_name == "FAT" else (1 if text_layer == "FEATURE_LABEL" else 256)
             msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
@@ -367,42 +369,37 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     "insert": (x + 2, y)
                 }
             )
-    
 
-# ----------------------------
-# Draw HP teks dengan MTEXT agar center & ikut rotasi
-# ----------------------------
+    # ----------------------------
+    # Draw HP teks di titik tengah (dengan opsi rotasi)
+    # ----------------------------
     for hp in hp_items:
         x, y = hp['xy']
-        rot = hp['rotation']
+        rot_deg = hp['rotation'] if rotate_hp else 0
+        rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
-    
-        # Tinggi huruf + warna sesuai jenis HP
+
         h = 4 if "HP COVER" in hp['obj']['folder'] else 3
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
-    
-        # Tambahkan MTEXT dengan anchor di tengah
-        mtext = msp.add_mtext(
+
+        # Estimasi lebar teks
+        text_width = len(name) * h * 0.6
+
+        # Offset ke kiri setengah lebar
+        dx = - (text_width / 2) * math.cos(rot)
+        dy = - (text_width / 2) * math.sin(rot)
+
+        text = msp.add_text(
             name,
             dxfattribs={
                 "layer": "FEATURE_LABEL",
                 "color": c,
-                "char_height": h,
-                "attachment_point": TextEntityAlignment.MIDDLE_CENTER,  # anchor di tengah
+                "height": h,
+                "rotation": rot_deg,
             }
         )
-    
-        # Pastikan lebar box cukup supaya teks tidak pecah baris
-        mtext.dxf.width = max(len(name) * h, 1.0)
-    
-        # Set lokasi tepat di titik HP
-        mtext.set_location((x, y))
-    
-        # Set rotasi
-        mtext.dxf.rotation = rot
+        text.set_pos((x + dx, y + dy), align="LEFT")
 
-                    
-    
     doc.saveas(output_path)
     return output_path
 
@@ -416,34 +413,30 @@ def run_kmz_to_dwg():
     st.sidebar.header("Rotation parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
+    rotate_hp=st.sidebar.checkbox("Rotate HP Text",value=True)
 
     if uploaded_kmz:
-        extract_dir="temp_kmz";os.makedirs(extract_dir,exist_ok=True)
-        with open("temp_upload.kmz","wb") as f: f.write(uploaded_kmz.read())
-        kml_path=extract_kmz("temp_upload.kmz",extract_dir)
-        items=parse_kml(kml_path);classified=classify_items(items)
-        template_path="template_ref.dxf"
+        tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
+        kmz_path=os.path.join(tmpdir,"uploaded.kmz")
+        with open(kmz_path,"wb") as f: f.write(uploaded_kmz.read())
+        kml_path=extract_kmz(kmz_path,tmpdir)
+        items=parse_kml(kml_path)
+        classified=classify_items(items)
+
+        template_path=None
         if uploaded_template:
+            template_path=os.path.join(tmpdir,"template.dxf")
             with open(template_path,"wb") as f: f.write(uploaded_template.read())
-        else:
-            template_path=template_path if os.path.exists(template_path) else ""
-        output_dxf="converted_output.dxf"
-        try:
-            result=build_dxf_with_smart_hp(classified,template_path,output_dxf,
-                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along)
-            if result:
-                with open(result,"rb") as f:
-                    st.download_button("⬇️ Download DXF",data=f,file_name="converted.dxf")
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
+
+        out_path="output_smart_hp.dxf"
+        res=build_dxf_with_smart_hp(
+            classified,template_path,out_path,
+            min_seg_len=min_seg_len,max_gap_along=max_gap_along,
+            rotate_hp=rotate_hp
+        )
+        if res:
+            with open(res,"rb") as f:
+                st.download_button("⬇️ Download DXF",f,res)
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
-
-
-
-
-
-
-
