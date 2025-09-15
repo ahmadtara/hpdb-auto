@@ -7,6 +7,7 @@ from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
 from statistics import mean
+from ezdxf.enums import TextEntityAlignment
 
 # ----------------------------
 # Config / Transformer
@@ -368,40 +369,40 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             )
     
 
-        # draw HP teks dengan MTEXT agar bisa center beneran
-        # --- REPLACE THIS WHOLE BLOCK: draw HP teks dengan MTEXT agar benar-benar center ---
+# ----------------------------
+# Draw HP teks dengan MTEXT agar center & ikut rotasi
+# ----------------------------
     for hp in hp_items:
         x, y = hp['xy']
         rot = hp['rotation']
         name = hp['obj'].get("name", "")
     
-        # Tinggi huruf
+        # Tinggi huruf + warna sesuai jenis HP
         h = 4 if "HP COVER" in hp['obj']['folder'] else 3
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
     
-        # Perkiraan lebar teks (dalam meter di DXF)
-        text_width = len(name) * h * 0.6  
-    
-        # Hitung offset agar teks center di titik HP
-        dx = - (text_width / 2) * math.cos(math.radians(rot))
-        dy = - (text_width / 2) * math.sin(math.radians(rot))
-    
-        # Tambahkan teks
+        # Tambahkan MTEXT dengan anchor di tengah
         mtext = msp.add_mtext(
             name,
             dxfattribs={
                 "layer": "FEATURE_LABEL",
                 "color": c,
                 "char_height": h,
-                "rotation": rot,
+                "attachment_point": TextEntityAlignment.MIDDLE_CENTER,  # anchor di tengah
             }
         )
     
-        # Posisi dipaksa ke tengah
-        mtext.set_location((x + dx, y + dy))
+        # Pastikan lebar box cukup supaya teks tidak pecah baris
+        mtext.dxf.width = max(len(name) * h, 1.0)
+    
+        # Set lokasi tepat di titik HP
+        mtext.set_location((x, y))
+    
+        # Set rotasi
+        mtext.dxf.rotation = rot
 
-
-
+                    
+    
     doc.saveas(output_path)
     return output_path
 
@@ -438,6 +439,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
