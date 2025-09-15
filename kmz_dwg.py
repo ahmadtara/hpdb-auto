@@ -374,13 +374,20 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 }
             )
 
-    # draw HP
+    # draw HP teks dengan center placement
     for hp in hp_items:
         x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
         if "HP COVER" in hp['obj']['folder']:
-            msp.add_text(name,dxfattribs={"height":4,"layer":"FEATURE_LABEL","color":6,"insert":(x,y),"rotation":rot})
+            text = msp.add_text(
+                name,
+                dxfattribs={"height":4,"layer":"FEATURE_LABEL","color":6,"rotation":rot}
+            )
         else:
-            msp.add_text(name,dxfattribs={"height":3,"layer":"FEATURE_LABEL","color":7,"insert":(x,y),"rotation":rot})
+            text = msp.add_text(
+                name,
+                dxfattribs={"height":3,"layer":"FEATURE_LABEL","color":7,"rotation":rot}
+            )
+        text.set_placement((x, y), align="MIDDLE_CENTER")
 
     doc.saveas(output_path)
     return output_path
@@ -420,5 +427,6 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
