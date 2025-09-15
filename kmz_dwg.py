@@ -380,7 +380,13 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 name,
                 dxfattribs={"height":3,"layer":"FEATURE_LABEL","color":7,"rotation":rot}
             )
-        text.set_placement((x, y), align="MIDDLE_CENTER")
+        #text.set_placement((x, y), align="MIDDLE_CENTER")
+        # ✅ Atur placement + align point biar bener2 di tengah
+        text.set_placement(
+        align="MIDDLE_CENTER",
+        p1=(x, y),   # titik acuan
+        p2=(x, y)    # align point = titik yg sama
+
 
     doc.saveas(output_path)
     return output_path
@@ -418,3 +424,4 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
