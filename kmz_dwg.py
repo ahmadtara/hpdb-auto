@@ -368,29 +368,50 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             )
     
 
-    # draw HP teks dengan MTEXT agar bisa center beneran
+        # draw HP teks dengan MTEXT agar bisa center beneran
+        # --- REPLACE THIS WHOLE BLOCK: draw HP teks dengan MTEXT agar benar-benar center ---
     for hp in hp_items:
         x, y = hp['xy']
-        rot = hp['rotation']
-        name = hp['obj'].get("name", "")
+        rot = hp['rotation'] or 0.0
+        name = str(hp['obj'].get("name", "") or "")
     
-        # Tinggi font
-        h = 4 if "HP COVER" in hp['obj']['folder'] else 3
-        c = 6 if "HP COVER" in hp['obj']['folder'] else 7
+        # pilih tinggi & warna
+        char_h = 4 if "HP COVER" in hp['obj']['folder'] else 3
+        color = 6 if "HP COVER" in hp['obj']['folder'] else 7
     
+        # buat MTEXT tanpa wrapping (width=0 => no automatic wrapping)
         mtext = msp.add_mtext(
-            name,
+            text=name,
             dxfattribs={
                 "layer": "FEATURE_LABEL",
-                "color": c,
-                "char_height": h,
-                "rotation": rot,
+                "color": color,
+                "char_height": char_h,
+                # jangan set rotation di awal (set setelah lokasi) — beberapa versi ezdxf/AutoCAD butuh ini
+                # "rotation": rot,
+                "width": 0,   # penting: 0 = disable wrapping, treat as single line
             }
         )
     
-        # 🔑 Set posisi & center alignment
+        # set attachment to Middle Center (5)
+        # attachment_point values (ezdxf): 1=top-left .. 5=middle-center .. etc.
+        mtext.dxf.attachment_point = 5
+    
+        # set location (insert point). Panggil dulu sebelum rotasi agar ezdxf menghitung kotak teks
         mtext.set_location((x, y))
-        mtext.dxf.attachment_point = 5   # 5 = Middle Center
+    
+        # kemudian set rotation and re-set location to ensure rotation applied around the same point
+        try:
+            mtext.dxf.rotation = float(rot)
+            # re-apply location to commit rotation around same attachment point
+            mtext.set_location((x, y))
+        except Exception:
+            # jika tidak bisa set rotation di mtext.dxf, abaikan — tetap coba posisi center tanpa rotasi
+            pass
+    
+        # Optional: tambahkan garis bantu (debug) untuk cek titik center
+        # msp.add_circle(center=(x,y), radius=0.5, dxfattribs={"layer":"DEBUG"})
+    # --- END REPLACEMENT ---
+
 
     doc.saveas(output_path)
     return output_path
@@ -428,6 +449,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
