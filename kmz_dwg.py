@@ -368,24 +368,27 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             )
 
     # draw HP teks dengan center placement
-    for hp in hp_items:
-        x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
-        if "HP COVER" in hp['obj']['folder']:
-            text = msp.add_text(
-                name,
-                dxfattribs={"height":4,"layer":"FEATURE_LABEL","color":6,"rotation":rot}
-            )
-        else:
-            text = msp.add_text(
-                name,
-                dxfattribs={"height":3,"layer":"FEATURE_LABEL","color":7,"rotation":rot}
-            )
-        #text.set_placement((x, y), align="MIDDLE_CENTER")
-        # ✅ Atur placement + align point biar bener2 di tengah
-        text.set_placement(
-        align="MIDDLE_CENTER",
-        p1=(x, y),   # titik acuan
-        p2=(x, y)    # align point = titik yg sama
+for hp in hp_items:
+    x, y = hp['xy']
+    rot = hp['rotation']
+    name = hp['obj'].get("name", "")
+
+    text = msp.add_text(
+        name,
+        dxfattribs={
+            "height": 4 if "HP COVER" in hp['obj']['folder'] else 3,
+            "layer": "FEATURE_LABEL",
+            "color": 6 if "HP COVER" in hp['obj']['folder'] else 7,
+            "rotation": rot,
+            # 🔑 pakai DXF halign & valign
+            "halign": 1,   # 0=left, 1=center, 2=right
+            "valign": 2    # 0=baseline, 1=bottom, 2=middle, 3=top
+        }
+    )
+
+    # sekarang harus pakai align_point, bukan insert
+    text.dxf.insert = (x, y)
+    text.dxf.align_point = (x, y)
 
 
     doc.saveas(output_path)
@@ -424,4 +427,5 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
