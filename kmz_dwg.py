@@ -389,16 +389,40 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         dx = - (text_width / 2) * math.cos(rot)
         dy = - (text_width / 2) * math.sin(rot)
 
+        # --- Replace previous msp.add_text(...) / set_pos(...) with this block ---
+# create TEXT entity and set DXF alignment attributes explicitly (compatible)
         text = msp.add_text(
             name,
             dxfattribs={
                 "layer": "FEATURE_LABEL",
                 "color": c,
                 "height": h,
-                "rotation": rot_deg,
             }
         )
-        text.set_pos((x, y), align="MIDDLE_CENTER")
+        
+        # rotation must be set on the dxf record
+        text.dxf.rotation = float(rot_deg)
+        
+        # set horizontal/vertical alignment fields (0=left,1=center,2=right ; valign: 0=baseline,1=bottom,2=middle,3=top)
+        # we want middle-center
+        try:
+            # newer ezdxf uses halign/valign names
+            text.dxf.halign = 1   # center
+            text.dxf.valign = 2   # middle
+        except Exception:
+            # fallback: some builds use different attributes — ignore if not present
+            pass
+        
+        # set insertion point and align_point to the same coords so the CAD viewer will use that as center
+        text.dxf.insert = (float(x), float(y))
+        # align_point is optional in some versions, but set if available
+        try:
+            text.dxf.align_point = (float(x), float(y))
+        except Exception:
+            # ignore if attribute not supported by this ezdxf build
+            pass
+        # --------------------------------------------------------------------
+            
 
 
     doc.saveas(output_path)
@@ -441,4 +465,5 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
