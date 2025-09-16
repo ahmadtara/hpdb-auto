@@ -87,7 +87,7 @@ else:
     menu = st.sidebar.radio("📌 Menu", [
         "KMZ → HPDB",
         "KML → Jalan",
-        "KMZ → DWG",
+        "KMZ → DWG CL",
         "KMZ → BOQ",
         "KMZ → DWG SF",
         "Urutkan Pole & HP",  # ✅ Tambahan menu baru
@@ -99,7 +99,7 @@ else:
         run_hpdb(HERE_API_KEY)
     elif menu == "KML → Jalan":
         run_kml_dxf()
-    elif menu == "KMZ → DWG":
+    elif menu == "KMZ → DWG CL":
         run_kmz_to_dwg()
     elif menu == "KMZ → BOQ":
         run_boq()
@@ -172,6 +172,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
