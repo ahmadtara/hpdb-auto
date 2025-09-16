@@ -107,12 +107,13 @@ else:
         run_sf()
     elif menu == "Urutkan Pole & HP":
         import streamlit as st
-
             st.markdown(
                 """
                 <style>
                 .btn {
-                    display: inline-block;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
                     padding: 10px 20px;
                     font-size: 16px;
                     border-radius: 8px;
@@ -125,6 +126,13 @@ else:
                 .btn:hover {
                     background: #45a049;
                 }
+                .icon {
+                    width: 18px;
+                    height: 18px;
+                    stroke: white;
+                    stroke-width: 2;
+                    fill: none;
+                }
                 </style>
                 """,
                 unsafe_allow_html=True
@@ -134,21 +142,38 @@ else:
             
             with col1:
                 st.markdown(
-                    '<a class="btn" href="https://urutkanpole-kingdion.streamlit.app/" target="_blank">🚀 Buka Urutkan Pole & HP</a>',
+                    """
+                    <a class="btn" href="https://urutkanpole-kingdion.streamlit.app/" target="_blank">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" viewBox="0 0 24 24">
+                            <path d="M5 13l4 4L19 7"/>
+                        </svg>
+                        Buka Urutkan Pole & HP
+                    </a>
+                    """,
                     unsafe_allow_html=True
                 )
             
             with col2:
                 st.markdown(
-                    '<a class="btn" href="https://kmzrapikan-kingdion.streamlit.app/" target="_blank">✨ Bersihkan</a>',
+                    """
+                    <a class="btn" href="https://kmzrapikan-kingdion.streamlit.app/" target="_blank">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M9 12l2 2 4-4"/>
+                        </svg>
+                        Bersihkan
+                    </a>
+                    """,
                     unsafe_allow_html=True
                 )
+                
 
                                                                     
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
