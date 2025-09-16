@@ -106,7 +106,6 @@ else:
     elif menu == "KMZ → DWG SF":
         run_sf()
     elif menu == "Urutkan Pole & HP":
-        import streamlit as st
             st.markdown(
                 """
                 <style>
@@ -173,6 +172,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
