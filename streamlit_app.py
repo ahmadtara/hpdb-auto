@@ -95,7 +95,7 @@ else:
     ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
 
-    if menu == "KML 🔄 Jalan":
+    if menu == "KML → Jalan":
         run_kml_dxf()
     elif menu == "KMZ 🔄 HPDB":
         run_hpdb(HERE_API_KEY)
@@ -172,6 +172,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
