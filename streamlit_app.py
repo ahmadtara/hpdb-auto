@@ -108,30 +108,36 @@ else:
     elif menu == "Urutkan Pole & HP":
         st.markdown(
             """
-            <a href="https://urutkanpole-kingdion.streamlit.app/" target="_blank">
-                    <button style="padding:10px 20px; font-size:16px; border-radius:8px; background:#4CAF50; color:white; border:none;">
-                        🚀 Buka Urutkan Pole & HP
-                    </button>
-                </a>
-                """,
-                unsafe_allow_html=True
-            )
-    
-        st.markdown(
-            """
-            <a href="https://kmzrapikan-kingdion.streamlit.app/" target="_blank">
-                <button style="padding:10px 20px; font-size:16px; border-radius:8px; background:#4CAF50; color:white; border:none; margin-top:10px;">
-                    ✨ Bersihkan
-                </button>
-            </a>
+            <style>
+            .btn {
+                display: inline-block;
+                padding: 10px 20px;
+                font-size: 16px;
+                border-radius: 8px;
+                background: #4CAF50;
+                color: white;
+                text-decoration: none;
+                font-weight: bold;
+                margin: 5px;
+            }
+            .btn:hover {
+                background: #45a049;
+            }
+            </style>
+        
+            <a class="btn" href="https://urutkanpole-kingdion.streamlit.app/" target="_blank">🚀 Buka Urutkan Pole & HP</a>
+            <a class="btn" href="https://kmzrapikan-kingdion.streamlit.app/" target="_blank">✨ Bersihkan</a>
             """,
             unsafe_allow_html=True
+        )
+
         )
                                                                     
     elif menu == "Logout":
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
