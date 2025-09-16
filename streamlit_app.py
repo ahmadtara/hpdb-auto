@@ -85,27 +85,27 @@ if not st.session_state["logged_in"]:
     login_page()
 else:
     menu = st.sidebar.radio("📌 Menu", [
-        "KMZ → HPDB",
         "KML → Jalan",
-        "KMZ → DWG CL",
-        "KMZ → BOQ",
-        "KMZ → DWG SF",
-        "Urutkan Pole & HP",  # ✅ Tambahan menu baru
+        "KMZ 🔄 HPDB",
+        "KMZ 🔄 DWG CL",
+        "KMZ 🔄 BOQ",
+        "KMZ 🔄 DWG SF",
+        "Urutkan Pole, HP & Clean",  # ✅ Tambahan menu baru
         "Logout"
     ])
     st.sidebar.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
 
-    if menu == "KMZ → HPDB":
-        run_hpdb(HERE_API_KEY)
-    elif menu == "KML → Jalan":
+    if menu == "KML 🔄 Jalan":
         run_kml_dxf()
-    elif menu == "KMZ → DWG CL":
+    elif menu == "KMZ 🔄 HPDB":
+        run_hpdb(HERE_API_KEY)
+    elif menu == "KMZ 🔄 DWG CL":
         run_kmz_to_dwg()
-    elif menu == "KMZ → BOQ":
+    elif menu == "KMZ 🔄 BOQ":
         run_boq()
-    elif menu == "KMZ → DWG SF":
+    elif menu == "KMZ 🔄 DWG SF":
         run_sf()
-    elif menu == "Urutkan Pole & HP":
+    elif menu == "Urutkan Pole, HP & Clean":
             st.markdown(
                 """
                 <style>
@@ -172,6 +172,7 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["user"] = None
         st.rerun()
+
 
 
 
