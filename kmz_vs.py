@@ -18,7 +18,7 @@ def run_boq():
 
     kmz_bytes = kmz_file.read()
 
-    # ---------- parse KML (single recursion from Document to avoid duplicates) ----------
+    # ---------- parse KML (rekursi folder) ----------
     def recurse_folder(folder, ns, path=""):
         items = []
         name_el = folder.find("kml:name", ns)
@@ -46,7 +46,6 @@ def run_boq():
         raw = z.read(kml_files[0])
         root = ET.fromstring(raw)
         ns = {"kml": "http://www.opengis.net/kml/2.2"}
-        # ambil element Document, kalau tidak ada pakai root
         doc = root.find("kml:Document", ns) or root
         placemarks = recurse_folder(doc, ns, path="")
 
@@ -63,16 +62,14 @@ def run_boq():
             return None
         if len(parts) == 1:
             return int(parts[0])
-        # jika multiple parts dan last part len == 3 => gabungkan (thousand grouping)
         if len(parts) >= 2 and len(parts[-1]) == 3:
             return int(''.join(parts))
-        # lain-lain (kemungkinan ada decimal) -> ambil integer part pertama
         return int(parts[0])
 
-    # helper filter
+    # helper filter (match exact folder, bukan substring)
     def get_items(foldername):
         fn = foldername.upper()
-        return [p for p in placemarks if fn in p["path"]]
+        return [p for p in placemarks if fn in p["path"].split("/")]
 
     # ---------- collect categories ---------- 
     dist = get_items("DISTRIBUTION CABLE")
@@ -86,18 +83,18 @@ def run_boq():
     # ---------- calculations ----------
     lines = ["A", "B", "C", "D"]
 
-    # Distribution: sum angka dari description per LINE
+    # Distribution per line
     dist_per_line = {L: 0 for L in lines}
     for p in dist:
         for L in lines:
-            if f"LINE {L}" in p["path"]:
+            if f"LINE {L}" in p["path"].split("/"):
                 v = extract_number_from_string(p.get("desc", ""))
                 if v is not None:
                     dist_per_line[L] += v
                 break
 
-    # Sling: jumlah angka dari name hanya untuk LINE A/B/C
-    sling_items_abc = [p for p in sling if any(f"LINE {L}" in p["path"] for L in ["A", "B", "C"])]
+    # Sling (hanya LINE A/B/C)
+    sling_items_abc = [p for p in sling if any(f"LINE {L}" in p["path"].split("/") for L in ["A", "B", "C"])]
     sling_nums = []
     for p in sling_items_abc:
         v = extract_number_from_string(p.get("name", ""))
@@ -106,16 +103,16 @@ def run_boq():
     sling_total = sum(sling_nums)
 
     # FAT per line & total
-    fat_counts = {L: len([p for p in fat if f"LINE {L}" in p["path"]]) for L in lines}
+    fat_counts = {L: len([p for p in fat if f"LINE {L}" in p["path"].split("/")]) for L in lines}
     total_fat = sum(fat_counts.values())
 
     # HP COVER per line & total
-    hp_cover_counts = {L: len([p for p in hp_cover if f"LINE {L}" in p["path"]]) for L in lines}
+    hp_cover_counts = {L: len([p for p in hp_cover if f"LINE {L}" in p["path"].split("/")]) for L in lines}
     total_hp_cover = sum(hp_cover_counts.values())
 
-    # Poles counts
+    # Poles
     def count_items_in_lines(items, lines_list=["A", "B", "C"]):
-        return len([p for p in items if any(f"LINE {L}" in p["path"] for L in lines_list)])
+        return len([p for p in items if any(f"LINE {L}" in p["path"].split("/") for L in lines_list)])
 
     np74_count = count_items_in_lines(new_pole_74, ["A", "B", "C"])
     np73_count = count_items_in_lines(new_pole_73, ["A", "B", "C"])
@@ -145,12 +142,10 @@ def run_boq():
     wb = load_workbook(template_file)
     ws = wb["BoM AE"]
 
-    # Distribution mapping (cells per range)
+    # Distribution mapping
     line_map = {"A": [2, 6, 10], "B": [3, 7, 11], "C": [4, 8, 12], "D": [5, 9, 13]}
     for line, cells in line_map.items():
-        # jumlah titik FAT pada line
         cnt = fat_counts.get(line, 0)
-        # jumlah distribution (sum angka dari description) pada line
         val = dist_per_line.get(line, 0)
         if cnt >= 1 and cnt <= 10:
             ws[f"C{cells[0]}"] = val
@@ -158,12 +153,11 @@ def run_boq():
             ws[f"C{cells[1]}"] = val
         elif cnt >= 16 and cnt <= 20:
             ws[f"C{cells[2]}"] = val
-        # jika cnt = 0 maka tidak menulis apa-apa
 
-    # Sling wire -> C15
+    # Sling wire
     ws["C15"] = sling_total
 
-    # FAT total -> C30 / C31 / C32
+    # FAT total -> C30..C32
     if 1 <= total_fat <= 24:
         ws["C30"] = 1
     elif 25 <= total_fat <= 36:
@@ -184,18 +178,14 @@ def run_boq():
 
     # Tambahan: sheet "BoQ NRO Cluster"
     ws2 = wb["BoQ NRO Cluster"]
-    # isi total HP COVER di O5
     ws2["O5"] = total_hp_cover
-    # isi nama file kmz di O3
     kmz_name = kmz_file.name.rsplit(".", 1)[0]
     ws2["O3"] = kmz_name
 
-    # ---------- save and provide download ----------
+    # ---------- save ----------
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
 
     st.success("✅ BOQ berhasil dibuat! (download di bawah)")
     st.download_button("📥 Download BOQ", buf.getvalue(), file_name="hasil_BOQ.xlsx")
-
-
