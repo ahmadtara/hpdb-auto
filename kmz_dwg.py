@@ -248,7 +248,9 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     "EXISTING_POLE": "A$Cdb6fd7d1"
     }
     # --- detect block references ---
-
+    matchblock_fat = None
+    matchblock_fdt = None
+    
 
     for b in doc.blocks:
         bname = b.name.upper()
@@ -257,6 +259,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         if not matchblock_fdt and "FDT" in bname:
             matchblock_fdt = b
         if not matchblock_pole and "POLE" in bname:
+            matchblock_pole = b
+        if not matchblock_pole and "NEW_POLE_7_3" in bname:
+            matchblock_pole = b
+        if not matchblock_pole and "EXISTING_POLE" in bname:
             matchblock_pole = b
 
     all_xy = []
@@ -483,6 +489,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
