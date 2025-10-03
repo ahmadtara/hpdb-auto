@@ -100,7 +100,8 @@ def apply_offset(points_xy):
 
 def classify_items(items):
     classified = {name: [] for name in [
-        "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
+        "FDT", "FAT", "HP_COVER", "HP_UNCOVER",
+        "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE",
         "BOUNDARY FAT", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
     for it in items:
@@ -113,9 +114,11 @@ def classify_items(items):
             classified["HP_COVER"].append(it)
         elif "HP UNCOVER" in folder:
             classified["HP_UNCOVER"].append(it)
-        elif "NEW POLE" in folder:
-            classified["NEW_POLE"].append(it)
-        elif "EXISTING" in folder or "EMR" in folder:
+        elif "NEW POLE 7-3" in folder:
+            classified["NEW_POLE_7_3"].append(it)
+        elif "NEW POLE 7-4" in folder:
+            classified["NEW_POLE_7_4"].append(it)
+        elif "EXISTING POLE" in folder or "EMR" in folder:
             classified["EXISTING_POLE"].append(it)
         elif "BOUNDARY FAT" in folder:
             classified["BOUNDARY FAT"].append(it)
@@ -236,18 +239,13 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         doc = ezdxf.new('R2010')
     msp = doc.modelspace()
 
+    block_mapping = {
+    "NEW_POLE_7_3": "A$C14dd5346",
+    "NEW_POLE_7_4": "np9",
+    "EXISTING_POLE": "A$Cdb6fd7d1"
+    }
     # --- detect block references ---
-    matchblock_fat = matchblock_fdt = matchblock_pole = None
 
-    for e in msp:
-        if e.dxftype() == "INSERT":
-            name = e.dxf.name.upper()
-            if "FAT" in name:
-                matchblock_fat = e
-            elif "FDT" in name:
-                matchblock_fdt = e
-            elif "POLE" in name or name.startswith("A$"):
-                matchblock_pole = e
 
     for b in doc.blocks:
         bname = b.name.upper()
@@ -331,19 +329,19 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
             elif layer_name == "FDT" and matchblock_fdt:
                 block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
-            elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
-                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
-
+            elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"]:
+                block_name = block_mapping.get(layer_name)
+            else:
+                block_name = None
+            
             if block_name:
                 try:
-                    scale = 1.0
-                    if layer_name == "FDT":
+                    # atur skala sesuai kategori
+                    if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
-                    elif layer_name == "FAT":
-                        scale = 0.0025
-                    elif "POLE" in layer_name:
+                    else:
                         scale = 1.0
-
+            
                     msp.add_blockref(
                         block_name, (x, y),
                         dxfattribs={
@@ -356,7 +354,9 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 except Exception as e:
                     st.warning(f"Gagal insert block {block_name}: {e}")
             else:
+                # fallback kalau tidak ada block
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+
 
             # Tambah teks untuk point (FDT, FAT, POLE, dll.)
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
@@ -365,7 +365,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             # Atur warna teks sesuai kategori
             if layer_name == "FAT":
                 color_val = 2   # kuning
-            elif layer_name in ["FDT", "NEW_POLE"]:
+            elif layer_name in ["FDT", "NEW_POLE_7_3", "NEW_POLE_7_4"]:
                 color_val = 1   # merah
             elif layer_name == "EXISTING_POLE":
                 color_val = 7   # putih
@@ -480,6 +480,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
