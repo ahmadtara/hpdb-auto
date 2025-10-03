@@ -108,22 +108,15 @@ def run_hpdb(HERE_API_KEY):
     #    return "UNKNOWN"
 
     def extract_fatcode(path: str) -> str:
-        """
-        Cari kode FAT dari path KMZ/KML.
-        Format yang dikenali:
-          - A01, B12, C99, D03 (default lama)
-          - A-01, B-12, C-99 (ada strip)
-          - A 01, B 12 (ada spasi)
-          - A001, B002 (3 digit angka)
-        """
-        # Hilangkan spasi & strip supaya seragam
-        clean_path = path.replace("-", "").replace(" ", "")
-        
-        # Cari pola: 1 huruf A-D + 2-3 digit angka
-        match = re.search(r"([A-D]\d{2,3})", clean_path.upper())
-        if match:
-            return match.group(1)
-        return "UNKNOWN"
+    parts = path.upper().split("/")
+    if "BOUNDARY FAT" in parts:
+        idx = parts.index("BOUNDARY FAT")
+        # cek semua part setelah "BOUNDARY FAT"
+        for part in parts[idx+1:]:
+            if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+                return part
+    return "UNKNOWN"
+
 
 
 
@@ -385,6 +378,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
