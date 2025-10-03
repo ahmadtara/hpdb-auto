@@ -87,9 +87,12 @@ def run_hpdb(HERE_API_KEY):
             for folder in root.findall(".//kml:Folder", ns):
                 all_pm += recurse_folder(folder, ns)
             data = {k: [] for k in [
-                "FAT", "NEW POLE 7-3", "EXISTING POLE EMR 7-3",
-                "EXISTING POLE EMR 7-4", "FDT", "HP COVER"
+                "FAT",
+                "NEW POLE 7-3", "NEW POLE 7-4", "NEW POLE 9-4",
+                "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 9-4",
+                "FDT", "HP COVER"
             ]}
+
             for p in all_pm:
                 for k in data:
                     if k in p["path"]:
@@ -104,15 +107,16 @@ def run_hpdb(HERE_API_KEY):
         return "UNKNOWN"
 
     def find_nearest_pole(fat, poles):
-    fx, fy = fat["lat"], fat["lon"]
-    nearest = None
-    min_dist = float("inf")
-    for p in poles:
-        dist = math.hypot(p["lat"] - fx, p["lon"] - fy)
-        if dist < min_dist:
-            min_dist = dist
-            nearest = p
-    return nearest
+        fx, fy = fat["lat"], fat["lon"]
+        nearest = None
+        min_dist = float("inf")
+        for p in poles:
+            dist = math.hypot(p["lat"] - fx, p["lon"] - fy)
+            if dist < min_dist:
+                min_dist = dist
+                nearest = p
+        return nearest
+
 
     def reverse_here(lat, lon):
         url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
@@ -148,7 +152,6 @@ def run_hpdb(HERE_API_KEY):
             + placemarks["EXISTING POLE EMR 9-4"]
         )
 
-        )
 
         rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
         fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
@@ -361,6 +364,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
