@@ -108,14 +108,14 @@ def run_hpdb(HERE_API_KEY):
     #    return "UNKNOWN"
 
     def extract_fatcode(path: str) -> str:
-    parts = path.upper().split("/")
-    if "BOUNDARY FAT" in parts:
-        idx = parts.index("BOUNDARY FAT")
-        # cek semua part setelah "BOUNDARY FAT"
-        for part in parts[idx+1:]:
-            if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
-                return part
-    return "UNKNOWN"
+        parts = path.upper().split("/")
+        if "BOUNDARY FAT" in parts:
+            idx = parts.index("BOUNDARY FAT")
+            # cek semua part setelah "BOUNDARY FAT"
+            for part in parts[idx+1:]:
+                if len(part) == 3 and part[0] in "ABCD" and part[1:].isdigit():
+                    return part
+        return "UNKNOWN"
 
 
 
@@ -378,6 +378,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
