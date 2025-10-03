@@ -240,6 +240,9 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     msp = doc.modelspace()
 
     block_mapping = {
+    "FDT": "FDT", 
+    "FAT": "FAT",    
+    "POLE": "A$C14dd5346",                            
     "NEW_POLE_7_3": "A$C14dd5346",
     "NEW_POLE_7_4": "np9",
     "EXISTING_POLE": "A$Cdb6fd7d1"
@@ -480,6 +483,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
