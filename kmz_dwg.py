@@ -391,7 +391,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
-                    "height": 8.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else .6,0
+                    "height": 7.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else 6.5,
                     "layer": text_layer,
                     "color": color_val,
                     "insert": (x + 2, y)
@@ -477,8 +477,6 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
-
 
 
 
