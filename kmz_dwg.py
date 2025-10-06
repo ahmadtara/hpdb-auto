@@ -411,7 +411,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
 
         # Estimasi lebar teks
-        text_width = len(name) * h * 0.6
+        text_width = len(name) * h * 0.9
 
         # Offset ke kiri setengah lebar (tidak digunakan langsung karena set center)
         dx = - (text_width / 2) * math.cos(rot)
@@ -477,4 +477,5 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
