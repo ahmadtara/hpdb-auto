@@ -393,7 +393,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else 2.5,
+                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
                     "color": color_val,
                     "insert": (x + 2, y)
@@ -409,7 +409,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
 
-        h = 5 if "HP COVER" in hp['obj']['folder'] else 3
+        h = 6 if "HP COVER" in hp['obj']['folder'] else 3
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
 
         # Estimasi lebar teks
@@ -479,11 +479,3 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
-
-
-
-
-
-
-
