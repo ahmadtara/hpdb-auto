@@ -353,8 +353,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 try:
                     if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
-                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "POLE", "EXISTING_POLE"]:
+                    elif layer_name in ["NEW_POLE_7_3", "POLE", "EXISTING_POLE"]:
                         scale = 1.0   # atau 0.2 tergantung seberapa kecil mau
+                    elif layer_name in ["NEW_POLE_7_4"]:
+                        scale = 0.0001   # atau 0.2 tergantung seberapa kecil mau
                     else:
                         scale = 1.0
 
@@ -477,6 +479,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
