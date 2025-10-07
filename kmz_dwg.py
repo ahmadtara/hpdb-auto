@@ -397,35 +397,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     "layer": text_layer,
                     "color": color_val,
                     "insert": (x + 2, y)
-                })
-
-    # ----------------------------
-    # Tambahkan teks jarak antar tiang
-    # ----------------------------
-    poles = []
-    for lname in ["NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE"]:
-        for obj in classified.get(lname, []):
-            if 'xy' in obj:
-                poles.append((obj['xy'], lname))
-    if len(poles) >= 2:
-        poles.sort(key=lambda p: (p[0][0], p[0][1]))
-        for i in range(len(poles) - 1):
-            p1, p2 = poles[i][0], poles[i+1][0]
-            dist = math.dist(p1, p2)
-            midx, midy = (p1[0]+p2[0])/2, (p1[1]+p2[1])/2
-            ang = segment_angle_xy(p1, p2)
-            txt = msp.add_text(f"{round(dist)}M", dxfattribs={
-                "layer": "FEATURE_LABEL",
-                "height": 4.0,
-                "color": 7
-            })
-            txt.dxf.rotation = float(ang)
-            try:
-                txt.dxf.halign = 1  # center
-                txt.dxf.valign = 2  # middle
-                txt.dxf.align_point = (midx, midy)
-            except Exception:
-                pass
+                }
+            )
 
     # ----------------------------
     # Draw HP teks di titik tengah (dengan opsi rotasi)
@@ -506,4 +479,3 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
