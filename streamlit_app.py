@@ -18,8 +18,8 @@ SESSION_TIMEOUT = 3600  # 1 jam = 3600 detik
 # -------------- ✅ USER LOGIN ---------------- #
 valid_users = {
     "zikni": "zikni",
-    "vendor": "vendor",
-    "toko": "toko"
+    "dion": "dion",
+    "ucok": "ucok"
 }
 blocked_users = set()
 
@@ -193,3 +193,4 @@ else:
         st.session_state["user"] = None
         st.session_state["login_time"] = None
         st.rerun()
+
