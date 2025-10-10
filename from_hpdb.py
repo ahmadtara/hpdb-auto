@@ -5,7 +5,7 @@ from lxml import etree
 from io import BytesIO
 import requests
 import math
-
+import numpy as np
 
 def run_hpdb(HERE_API_KEY):
 
@@ -71,11 +71,14 @@ def run_hpdb(HERE_API_KEY):
                 if first is None:
                     continue
                 lon, lat = first
+                desc_el = pm.find("kml:description", ns)
+                desc_text = desc_el.text.strip() if (desc_el is not None and desc_el.text) else ""
                 items.append({
                     "name": nm.text.strip(),
                     "lat": lat,
                     "lon": lon,
-                    "path": new_path
+                    "path": new_path,
+                    "description": desc_text
                 })
             return items
 
@@ -119,19 +122,33 @@ def run_hpdb(HERE_API_KEY):
                 nearest = p
         return nearest
 
+    # Cached reverse geocode using rounded coords to reduce calls
+    reverse_cache = {}
+    session = requests.Session()
 
     def reverse_here(lat, lon):
-        url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={lat},{lon}&apikey={HERE_API_KEY}&lang=en-US"
-        r = requests.get(url)
-        if r.status_code == 200:
-            comp = r.json().get("items", [{}])[0].get("address", {})
-            return {
-                "district": comp.get("district", "").upper(),
-                "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
-                "postalcode": comp.get("postalCode", "").upper(),
-                "street": comp.get("street", "").upper()
-            }
-        return {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+        # round to 6 decimals to unify very-close coordinates
+        key = (round(float(lat), 6), round(float(lon), 6))
+        if key in reverse_cache:
+            return reverse_cache[key]
+        url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={key[0]},{key[1]}&apikey={HERE_API_KEY}&lang=en-US"
+        try:
+            r = session.get(url, timeout=8)
+            if r.status_code == 200:
+                comp = r.json().get("items", [{}])[0].get("address", {})
+                value = {
+                    "district": comp.get("district", "").upper(),
+                    "subdistrict": comp.get("subdistrict", "").upper().replace("KEL.", "").strip(),
+                    "postalcode": comp.get("postalCode", "").upper(),
+                    "street": comp.get("street", "").upper()
+                }
+                reverse_cache[key] = value
+                return value
+        except Exception:
+            pass
+        empty = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+        reverse_cache[key] = empty
+        return empty
 
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
@@ -154,104 +171,159 @@ def run_hpdb(HERE_API_KEY):
             + placemarks["EXISTING POLE EMR 9-4"]
         )
 
-
-        rc = reverse_here(fdt[0]["lat"], fdt[0]["lon"]) if fdt else {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
-        fdtcode = fdt[0]["name"].strip().upper() if fdt else "UNKNOWN"
-        oltcode = "UNKNOWN"
-
+        # fdt reverse geocode base values
         if fdt:
-            with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
-                f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
-                parser = etree.XMLParser(recover=True)
-                root = etree.parse(z.open(f), parser=parser).getroot()
-                ns = {"kml": "http://www.opengis.net/kml/2.2"}
-                for pm in root.findall(".//kml:Placemark", ns):
-                    name_el = pm.find("kml:name", ns)
-                    desc_el = pm.find("kml:description", ns)
-                    if name_el is not None and name_el.text.strip().upper() == fdtcode:
-                        if desc_el is not None:
-                            oltcode = desc_el.text.strip().upper()
-                        break
+            fdt_item = fdt[0]
+            rc = reverse_here(fdt_item["lat"], fdt_item["lon"])
+            fdtcode = fdt_item["name"].strip().upper()
+            # use description captured earlier for oltcode if present, else UNKNOWN
+            oltcode = fdt_item.get("description", "").strip().upper() or "UNKNOWN"
+        else:
+            rc = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
+            fdtcode = "UNKNOWN"
+            oltcode = "UNKNOWN"
 
         progress = st.progress(0)
-        total = len(hp)
+        total = max(1, len(hp))
 
         must_cols = [
             "block", "homenumber", "fdtcode", "oltcode", "fatcode",
             "Latitude_homepass", "Longitude_homepass", "district", "subdistrict", "postalcode",
             "FAT ID", "Pole ID", "Pole Latitude", "Pole Longitude", "FAT Address",
             "Line", "Capacity", "FAT Port",
-            "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"
+            "FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number", "street"
         ]
         for col in must_cols:
             if col not in df.columns:
                 df[col] = ""
 
-        for i, h in enumerate(hp):
-            if i >= len(df):
-                break
+        # Prepare lists to fill dataframe in batch
+        n_rows = min(len(hp), len(df))
+        fatcode_list = []
+        block_list = []
+        homenumber_list = []
+        lat_list = []
+        lon_list = []
+        district_list = []
+        subdistrict_list = []
+        postalcode_list = []
+        fdtcode_list = []
+        oltcode_list = []
+        street_list = []
+        fat_id_list = []
+        fat_address_list = []
+        pole_id_list = []
+        pole_lat_list = []
+        pole_lon_list = []
+
+        # caches for FAT address & nearest pole by FAT name to avoid recomputation
+        fatname_to_address = {}
+        fatname_to_nearpole = {}
+
+        for i in range(n_rows):
+            h = hp[i]
             fc = extract_fatcode(h["path"])
-            df.at[i, "fatcode"] = fc
+            fatcode_list.append(fc)
 
             name_parts = h["name"].split(".")
             if len(name_parts) == 2 and name_parts[0].isalnum() and name_parts[1].isdigit():
-                df.at[i, "block"] = name_parts[0].strip().upper()
-                df.at[i, "homenumber"] = name_parts[1].strip()
+                block_list.append(name_parts[0].strip().upper())
+                homenumber_list.append(name_parts[1].strip())
             else:
-                df.at[i, "block"] = ""
-                df.at[i, "homenumber"] = h["name"]
+                block_list.append("")
+                homenumber_list.append(h["name"])
 
-            df.at[i, "Latitude_homepass"] = h["lat"]
-            df.at[i, "Longitude_homepass"] = h["lon"]
-            df.at[i, "district"] = rc["district"]
-            df.at[i, "subdistrict"] = rc["subdistrict"]
-            df.at[i, "postalcode"] = rc["postalcode"]
-            df.at[i, "fdtcode"] = fdtcode
-            df.at[i, "oltcode"] = oltcode
+            lat_list.append(h["lat"])
+            lon_list.append(h["lon"])
+            district_list.append(rc["district"])
+            subdistrict_list.append(rc["subdistrict"])
+            postalcode_list.append(rc["postalcode"])
+            fdtcode_list.append(fdtcode)
+            oltcode_list.append(oltcode)
 
+            # street from HERE with caching
             hh = reverse_here(h["lat"], h["lon"])
-            df.at[i, "street"] = hh["street"].replace("JALAN ", "").strip()
+            street_list.append(hh["street"].replace("JALAN ", "").strip() if hh["street"] else "")
 
+            # find FAT item match
             mf = next((x for x in fat if fc in x["name"]), None)
             if mf:
-                df.at[i, "FAT ID"] = mf["name"]
-                df.at[i, "FAT Address"] = reverse_here(mf["lat"], mf["lon"])["street"]
-            
-                nearest_pole = find_nearest_pole(mf, all_poles)
-                if nearest_pole:
-                    df.at[i, "Pole ID"] = nearest_pole["name"]
-                    df.at[i, "Pole Latitude"] = nearest_pole["lat"]
-                    df.at[i, "Pole Longitude"] = nearest_pole["lon"]
+                fat_name = mf["name"]
+                fat_id_list.append(fat_name)
+                # get fat address once per fat_name
+                if fat_name in fatname_to_address:
+                    fat_address_list.append(fatname_to_address[fat_name])
                 else:
-                    df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
-                    df.at[i, "Pole Latitude"] = ""
-                    df.at[i, "Pole Longitude"] = ""
+                    fa = reverse_here(mf["lat"], mf["lon"])["street"]
+                    fatname_to_address[fat_name] = fa
+                    fat_address_list.append(fa)
+
+                # nearest pole once per fat_name
+                if fat_name in fatname_to_nearpole:
+                    npole = fatname_to_nearpole[fat_name]
+                else:
+                    npole = find_nearest_pole(mf, all_poles)
+                    fatname_to_nearpole[fat_name] = npole
+                if npole:
+                    pole_id_list.append(npole["name"])
+                    pole_lat_list.append(npole["lat"])
+                    pole_lon_list.append(npole["lon"])
+                else:
+                    pole_id_list.append("POLE_NOT_FOUND")
+                    pole_lat_list.append("")
+                    pole_lon_list.append("")
             else:
-                df.at[i, "FAT ID"] = "FAT_NOT_FOUND"
-                df.at[i, "Pole ID"] = "POLE_NOT_FOUND"
-                df.at[i, "FAT Address"] = ""
+                fat_id_list.append("FAT_NOT_FOUND")
+                fat_address_list.append("")
+                pole_id_list.append("POLE_NOT_FOUND")
+                pole_lat_list.append("")
+                pole_lon_list.append("")
 
+            # Update progress only periodically to reduce rerenders
+            if (i % 25 == 0) or (i == n_rows - 1):
+                progress.progress(int((i + 1) * 100 / total))
 
-            progress.progress(int((i + 1) * 100 / max(1, len(hp))))
+        # Assign lists to dataframe in batch (only for the rows we processed)
+        idx_slice = df.index[:n_rows]
+        df.loc[idx_slice, "fatcode"] = fatcode_list
+        df.loc[idx_slice, "block"] = block_list
+        df.loc[idx_slice, "homenumber"] = homenumber_list
+        df.loc[idx_slice, "Latitude_homepass"] = lat_list
+        df.loc[idx_slice, "Longitude_homepass"] = lon_list
+        df.loc[idx_slice, "district"] = district_list
+        df.loc[idx_slice, "subdistrict"] = subdistrict_list
+        df.loc[idx_slice, "postalcode"] = postalcode_list
+        df.loc[idx_slice, "fdtcode"] = fdtcode_list
+        df.loc[idx_slice, "oltcode"] = oltcode_list
+        df.loc[idx_slice, "street"] = street_list
+        df.loc[idx_slice, "FAT ID"] = fat_id_list
+        df.loc[idx_slice, "FAT Address"] = fat_address_list
+        df.loc[idx_slice, "Pole ID"] = pole_id_list
+        df.loc[idx_slice, "Pole Latitude"] = pole_lat_list
+        df.loc[idx_slice, "Pole Longitude"] = pole_lon_list
 
         # ====== AUTO FILL FAT PORT ======
-        for fat_id, group in df.groupby("FAT ID", sort=False):
+        # ensure FAT Port column exists and numeric
+        if "FAT Port" not in df.columns:
+            df["FAT Port"] = 0
+        # do grouping and assign sequential port numbers per FAT ID (only rows we filled)
+        for fat_id, group in df.loc[idx_slice].groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
-            for i, idx in enumerate(group.index, start=1):
-                df.at[idx, "FAT Port"] = i
+            for i_seq, idx in enumerate(group.index, start=1):
+                df.at[idx, "FAT Port"] = i_seq
 
         # ====== AUTO FILL LINE & CAPACITY PER FAT ID ======
-        for fat_id, group in df.groupby("FAT ID", sort=False):
+        for fat_id, group in df.loc[idx_slice].groupby("FAT ID", sort=False):
             if fat_id == "" or fat_id == "FAT_NOT_FOUND":
                 continue
             fatcodes = group["fatcode"].dropna().unique()
             if len(fatcodes) == 0:
                 continue
-            fc = fatcodes[0]
-            letter = fc[0] if fc and fc[0] in "ABCD" else ""
+            fc0 = fatcodes[0]
+            letter = fc0[0] if fc0 and fc0[0] in "ABCD" else ""
             try:
-                nums = [int(x[1:]) for x in fatcodes if len(x) >= 2]
+                nums = [int(x[1:]) for x in fatcodes if len(x) >= 2 and x[1:].isdigit()]
                 max_num = max(nums) if nums else 0
             except:
                 max_num = 0
@@ -269,26 +341,14 @@ def run_hpdb(HERE_API_KEY):
             df.at[first_idx, "Line"] = ("LINE  " + letter) if letter else ""
             df.at[first_idx, "Capacity"] = cap_val
 
-        # ====== FINAL: ASSIGN FDT Tray, FDT Port, Tube Colour, Core Number
-        # Logic that matches contoh.xlsx exactly:
-        # - port/tray are GLOBAL (port 1..10 -> then tray++)
-        # - tube/core RESET when Line changes (tube:1..n; core 1..10)
-        # - for each FAT ID: first row (FAT Port==1) -> write Tray & Port & Tube & Core(odd)
-        #                  second row (FAT Port==2) -> write Tube & Core(even)
-        # Note: we infer Line per FAT ID by taking any non-null 'Line' in the group and if missing,
-        #       inherit previous line (same behavior as contoh).
-        import numpy as np
+        # ====== FINAL: ASSIGN FDT Tray, FDT Port, Tube Colour, Core Number ======
+        # same logic as contoh.xlsx: global tray/port; tube/core reset when Line changes
+        df['FAT Port'] = pd.to_numeric(df['FAT Port'], errors='coerce').fillna(0).astype(int)
 
-        # Ensure FAT Port numeric
-        if "FAT Port" in df.columns:
-            df['FAT Port'] = pd.to_numeric(df['FAT Port'], errors='coerce').fillna(0).astype(int)
-
-        # Ensure FDT columns exist & cleared
         for col in ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]:
             if col not in df.columns:
                 df[col] = np.nan
             else:
-                # clear previous values to avoid partial leftover
                 df[col] = np.nan
 
         # Build FAT ID -> Line mapping (inherit previous if missing)
@@ -303,20 +363,17 @@ def run_hpdb(HERE_API_KEY):
                 line_val = prev_line
             fat_line[fat_id] = line_val
 
-        # Global port/tray counters; tube/core reset when Line changes
         current_tray = 1
         current_port = 1
         current_tube = 1
         current_core = 1
         prev_line = None
 
-        # Process FAT IDs in appearance order
         for fat in df['FAT ID'].drop_duplicates():
             if not fat or fat == "FAT_NOT_FOUND":
                 continue
 
             line = fat_line.get(fat, None)
-            # If line changed, reset tube/core but NOT tray/port (tray/port are global)
             if line != prev_line:
                 current_tube = 1
                 current_core = 1
@@ -325,7 +382,6 @@ def run_hpdb(HERE_API_KEY):
             grp = df[df['FAT ID'] == fat]
             if grp.empty:
                 continue
-            # pick first and second rows (prefer rows where FAT Port == 1/2)
             first_candidates = grp.index[grp['FAT Port'] == 1]
             if len(first_candidates) > 0:
                 idx_first = first_candidates[0]
@@ -336,25 +392,21 @@ def run_hpdb(HERE_API_KEY):
                 idx_second = second_candidates[0]
             else:
                 idx_second = grp.index[1] if len(grp) > 1 else None
-                
-            # Assign first row: Tray, Port, Tube, Core(odd)
+
             df.at[idx_first, "FDT Tray (Front)"] = current_tray
             df.at[idx_first, "FDT Port"] = current_port
             df.at[idx_first, "Tube Colour"] = current_tube
             df.at[idx_first, "Core Number"] = current_core
 
-            # Assign second row: Tube, Core(even) only (leave Tray/Port blank)
             if idx_second is not None:
                 df.at[idx_second, "Tube Colour"] = current_tube
                 df.at[idx_second, "Core Number"] = current_core + 1
 
-            # increment core & tube (tube increments after core wraps beyond 10)
             current_core += 2
             if current_core > 10:
                 current_core -= 10
                 current_tube += 1
 
-            # increment global port/tray
             current_port += 1
             if current_port > 10:
                 current_port = 1
@@ -366,13 +418,3 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
-
-
-
-
-
-
-
-
-
