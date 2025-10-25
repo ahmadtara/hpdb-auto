@@ -6,7 +6,8 @@ import time
 # -------------- ✅ KONFIGURASI ---------------- #
 TELEGRAM_TOKEN = "7656007924:AAGi1it2M7jE0Sen28myiPhEmYPd1-jsI_Q"
 TELEGRAM_CHAT_ID = "6122753506"
-HERE_API_KEY = "iWCrFicKYt9_AOCtg76h76MlqZkVTn94eHbBl_cE8m0"
+HERE_API_KEY = "BO_l7Fg-xhxA-T4FwiZ_hHQs9fpI4u7vRqfM7xxT0Ec"
+
 
 BOT_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -193,4 +194,5 @@ else:
         st.session_state["user"] = None
         st.session_state["login_time"] = None
         st.rerun()
+
 
