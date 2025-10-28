@@ -108,8 +108,10 @@ def classify_items(items):
         folder = it['folder']
         if "FDT" in folder:
             classified["FDT"].append(it)
-        elif "FAT" in folder and folder != "FAT AREA":
+        elif "FAT" in folder:
             classified["FAT"].append(it)
+        elif "FAT AREA" in folder or "BOUNDARY FAT" in folder:
+            classified["BOUNDARY FAT"].append(it)
         elif "HP COVER" in folder:
             classified["HP_COVER"].append(it)
         elif "HP UNCOVER" in folder:
@@ -485,4 +487,5 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
