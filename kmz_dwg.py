@@ -100,8 +100,7 @@ def apply_offset(points_xy):
 
 def classify_items(items):
     classified = {name: [] for name in [
-        "FDT", "FAT", "HP_COVER", "HP_UNCOVER",
-        "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE",
+        "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
         "BOUNDARY FAT", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
     for it in items:
@@ -114,11 +113,9 @@ def classify_items(items):
             classified["HP_COVER"].append(it)
         elif "HP UNCOVER" in folder:
             classified["HP_UNCOVER"].append(it)
-        elif "NEW POLE 7-3" in folder:
-            classified["NEW_POLE_7_3"].append(it)
-        elif "NEW POLE 7-4" in folder:
-            classified["NEW_POLE_7_4"].append(it)
-        elif "EXISTING POLE" in folder or "EMR" in folder:
+        elif "NEW POLE" in folder:
+            classified["NEW_POLE"].append(it)
+        elif "EXISTING" in folder or "EMR" in folder:
             classified["EXISTING_POLE"].append(it)
         elif "BOUNDARY FAT" in folder:
             classified["BOUNDARY FAT"].append(it)
@@ -239,34 +236,28 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         doc = ezdxf.new('R2010')
     msp = doc.modelspace()
 
-    block_mapping = {
-        "FDT": "FDT",
-        "FAT": "FAT",
-        "POLE": "A$C14dd5346",
-        "NEW_POLE_7_3": "A$C14dd5346",
-        "NEW_POLE_7_4": "np9",
-        "EXISTING_POLE": "A$Cdb6fd7d1"
-    }
-
     # --- detect block references ---
-    matchblock_fat = None
-    matchblock_fdt = None
-    matchblock_pole = None
+    matchblock_fat = matchblock_fdt = matchblock_pole = None
 
-    # scan block definitions in template
+    for e in msp:
+        if e.dxftype() == "INSERT":
+            name = e.dxf.name.upper()
+            if "FAT" in name:
+                matchblock_fat = e
+            elif "FDT" in name:
+                matchblock_fdt = e
+            elif "POLE" in name or name.startswith("A$"):
+                matchblock_pole = e
+
     for b in doc.blocks:
-        try:
-            bname = b.name.upper()
-        except Exception:
-            continue
+        bname = b.name.upper()
         if not matchblock_fat and "FAT" in bname:
             matchblock_fat = b
         if not matchblock_fdt and "FDT" in bname:
             matchblock_fdt = b
-        if not matchblock_pole and ("POLE" in bname or bname.startswith("A$") or "NEW_POLE" in bname or "EXISTING_POLE" in bname):
+        if not matchblock_pole and "POLE" in bname:
             matchblock_pole = b
 
-    # collect XY coords and offset them
     all_xy = []
     for _, cat_items in classified.items():
         for obj in cat_items:
@@ -297,15 +288,11 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     cables = build_cable_lines(classified)
     hp_items = []
     for obj in classified.get("HP_COVER", []) + classified.get("HP_UNCOVER", []):
-        if 'xy' in obj:
-            hp_items.append({'obj': obj, 'xy': obj['xy']})
+        if 'xy' in obj: hp_items.append({'obj': obj, 'xy': obj['xy']})
 
     groups, hp_meta = group_hp_by_cable_and_along(hp_items, cables, max_gap_along=max_gap_along)
-    for group in groups:
-        c_idx = group['cable_idx']
-        if c_idx >= len(cables):
-            continue
-        line = cables[c_idx]['line']
+    for g_idx, group in enumerate(groups):
+        c_idx = group['cable_idx']; line = cables[c_idx]['line']
         rep_along = sorted(group['along_vals'])[len(group['along_vals'])//2]
         rep_point = line.interpolate(rep_along)
         angle = nearest_segment_angle_with_minlen((rep_point.x, rep_point.y), line, min_seg_len)
@@ -325,10 +312,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
-            if obj['type'] == "path":
-                if len(obj.get('xy_path', [])) >= 2:
+            if obj['type']=="path":
+                if len(obj.get('xy_path',[]))>=2:
                     msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                elif len(obj.get('xy_path', [])) == 1:
+                elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
     for layer_name, cat_items in classified.items():
@@ -340,22 +327,21 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 continue
             x, y = obj['xy']
             block_name = None
-            # prefer using block_mapping for new/existing poles
             if layer_name == "FAT" and matchblock_fat:
-                # get block name (dxf block ref or block definition)
-                block_name = matchblock_fat.name if hasattr(matchblock_fat, "name") else (matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else None)
+                block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
             elif layer_name == "FDT" and matchblock_fdt:
-                block_name = matchblock_fdt.name if hasattr(matchblock_fdt, "name") else (matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else None)
-            elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE"]:
-                block_name = block_mapping.get(layer_name)
+                block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
+            elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
+                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
 
             if block_name:
                 try:
-                    if layer_name in ["FDT", "FAT"]:
+                    scale = 1.0
+                    if layer_name == "FDT":
                         scale = 0.0025
-                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "POLE", "EXISTING_POLE"]:
-                        scale = 0.1   # atau 0.2 tergantung seberapa kecil mau
-                    else:
+                    elif layer_name == "FAT":
+                        scale = 0.0025
+                    elif "POLE" in layer_name:
                         scale = 1.0
 
                     msp.add_blockref(
@@ -369,34 +355,35 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     )
                 except Exception as e:
                     st.warning(f"Gagal insert block {block_name}: {e}")
-                    # fallback: circle if block insertion failed
-                    msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
             else:
-                # fallback kalau tidak ada block
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
             # Tambah teks untuk point (FDT, FAT, POLE, dll.)
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
-
+            
+            # Atur warna teks sesuai kategori
             # Atur warna teks sesuai kategori
             if layer_name == "FAT":
                 color_val = 2   # kuning
-            elif layer_name in ["FDT", "NEW_POLE_7_3", "NEW_POLE_7_4", "POLE"]:
+            elif layer_name in ["FDT", "NEW_POLE"]:
                 color_val = 1   # merah
             elif layer_name == "EXISTING_POLE":
                 color_val = 7   # putih
             else:
                 color_val = 256 # bylayer
 
+            
+            # Tambah teks ke DXF
             msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else 1.5,
+                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
-                    "color": color_val,
+                    "color": color_val,   # ✅ pakai hasil logika warna
                     "insert": (x + 2, y)
                 }
             )
+
 
     # ----------------------------
     # Draw HP teks di titik tengah (dengan opsi rotasi)
@@ -413,10 +400,12 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         # Estimasi lebar teks
         text_width = len(name) * h * 0.6
 
-        # Offset ke kiri setengah lebar (tidak digunakan langsung karena set center)
+        # Offset ke kiri setengah lebar
         dx = - (text_width / 2) * math.cos(rot)
         dy = - (text_width / 2) * math.sin(rot)
 
+        # --- Replace previous msp.add_text(...) / set_pos(...) with this block ---
+# create TEXT entity and set DXF alignment attributes explicitly (compatible)
         text = msp.add_text(
             name,
             dxfattribs={
@@ -425,17 +414,31 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 "height": h,
             }
         )
+        
+        # rotation must be set on the dxf record
         text.dxf.rotation = float(rot_deg)
+        
+        # set horizontal/vertical alignment fields (0=left,1=center,2=right ; valign: 0=baseline,1=bottom,2=middle,3=top)
+        # we want middle-center
         try:
+            # newer ezdxf uses halign/valign names
             text.dxf.halign = 1   # center
             text.dxf.valign = 2   # middle
         except Exception:
+            # fallback: some builds use different attributes — ignore if not present
             pass
+        
+        # set insertion point and align_point to the same coords so the CAD viewer will use that as center
         text.dxf.insert = (float(x), float(y))
+        # align_point is optional in some versions, but set if available
         try:
             text.dxf.align_point = (float(x), float(y))
         except Exception:
+            # ignore if attribute not supported by this ezdxf build
             pass
+        # --------------------------------------------------------------------
+            
+
 
     doc.saveas(output_path)
     return output_path
@@ -477,3 +480,6 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
+
+
