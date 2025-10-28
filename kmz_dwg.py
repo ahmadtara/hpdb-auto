@@ -6,6 +6,7 @@ import ezdxf
 from pyproj import Transformer
 import math
 from shapely.geometry import Point, LineString
+from shapely.ops import nearest_points
 from statistics import mean
 
 # ----------------------------
@@ -16,7 +17,7 @@ transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 target_folders = {
     'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
-    'BOUNDARY FAT', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
+    'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
 # ----------------------------
@@ -101,7 +102,7 @@ def apply_offset(points_xy):
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER", "NEW_POLE", "EXISTING_POLE", "POLE",
-        "BOUNDARY FAT", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
+        "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
     for it in items:
         folder = it['folder']
@@ -117,8 +118,8 @@ def classify_items(items):
             classified["NEW_POLE"].append(it)
         elif "EXISTING" in folder or "EMR" in folder:
             classified["EXISTING_POLE"].append(it)
-        elif "BOUNDARY FAT" in folder:
-            classified["BOUNDARY FAT"].append(it)
+        elif "BOUNDARY" in folder:
+            classified["BOUNDARY"].append(it)
         elif "DISTRIBUTION CABLE" in folder:
             classified["DISTRIBUTION_CABLE"].append(it)
         elif "SLING WIRE" in folder:
@@ -145,7 +146,6 @@ def segment_angle_xy(p1, p2):
 # Cable helpers
 # ----------------------------
 def build_cable_lines(classified):
-    from shapely.ops import nearest_points
     cables = []
     for item in classified.get("DISTRIBUTION_CABLE", []):
         if item['type'] != 'path' or not item.get('coords'):
@@ -228,17 +228,15 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # Main DXF builder
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
-                            min_seg_len=15.0, max_gap_along=20.0,
-                            rotate_hp=True):
+                            min_seg_len=15.0, max_gap_along=20.0):
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
     else:
         doc = ezdxf.new('R2010')
     msp = doc.modelspace()
 
-    # --- detect block references ---
+    # --- detect block references automatically ---
     matchblock_fat = matchblock_fdt = matchblock_pole = None
-
     for e in msp:
         if e.dxftype() == "INSERT":
             name = e.dxf.name.upper()
@@ -249,15 +247,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             elif "POLE" in name or name.startswith("A$"):
                 matchblock_pole = e
 
-    for b in doc.blocks:
-        bname = b.name.upper()
-        if not matchblock_fat and "FAT" in bname:
-            matchblock_fat = b
-        if not matchblock_fdt and "FDT" in bname:
-            matchblock_fdt = b
-        if not matchblock_pole and "POLE" in bname:
-            matchblock_pole = b
-
+    # shift coords
     all_xy = []
     for _, cat_items in classified.items():
         for obj in cat_items:
@@ -277,8 +267,9 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             elif obj['type'] == 'path':
                 obj['xy_path'] = shifted_all[idx: idx + len(obj['coords'])]; idx += len(obj['coords'])
 
+    # mapping
     layer_mapping = {
-        "BOUNDARY FAT": "FAT AREA",
+        "BOUNDARY": "FAT AREA",
         "DISTRIBUTION_CABLE": "FO 36 CORE",
         "SLING_WIRE": "STRAND UG",
         "KOTAK": "GARIS HOMEPASS",
@@ -308,7 +299,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     best_angle = nearest_segment_angle_with_minlen(hp['xy'], c['line'], min_seg_len)
             hp['rotation'] = best_angle
 
-    # Gambar polyline & block lain
+    # draw polylines
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
@@ -318,6 +309,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 elif len(obj.get('xy_path',[]))==1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
+        # draw points (FAT/FDT/POLE)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -328,14 +320,16 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             x, y = obj['xy']
             block_name = None
             if layer_name == "FAT" and matchblock_fat:
-                block_name = matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else matchblock_fat.name
+                block_name = matchblock_fat.dxf.name
             elif layer_name == "FDT" and matchblock_fdt:
-                block_name = matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else matchblock_fdt.name
+                block_name = matchblock_fdt.dxf.name
             elif layer_name in ["NEW_POLE", "EXISTING_POLE"] and matchblock_pole:
-                block_name = matchblock_pole.dxf.name if hasattr(matchblock_pole, "dxf") else matchblock_pole.name
+                block_name = matchblock_pole.dxf.name
 
+            inserted = False
             if block_name:
                 try:
+                    # --- scale manual ---
                     scale = 1.0
                     if layer_name == "FDT":
                         scale = 0.0025
@@ -353,92 +347,31 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                             "zscale": scale
                         }
                     )
-                except Exception as e:
-                    st.warning(f"Gagal insert block {block_name}: {e}")
-            else:
+                    inserted = True
+                except:
+                    inserted = False
+
+            if not inserted:
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
-
-            # Tambah teks untuk point (FDT, FAT, POLE, dll.)
-            text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
-            
-            # Atur warna teks sesuai kategori
-            # Atur warna teks sesuai kategori
-            if layer_name == "FAT":
-                color_val = 2   # kuning
-            elif layer_name in ["FDT", "NEW_POLE"]:
-                color_val = 1   # merah
-            elif layer_name == "EXISTING_POLE":
-                color_val = 7   # putih
-            else:
-                color_val = 256 # bylayer
-
-            
-            # Tambah teks ke DXF
-            msp.add_text(
-                obj.get("name", ""),
-                dxfattribs={
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
-                    "layer": text_layer,
-                    "color": color_val,   # ✅ pakai hasil logika warna
-                    "insert": (x + 2, y)
-                }
-            )
+                text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
+                msp.add_text(
+                    obj.get("name", ""),
+                    dxfattribs={
+                        "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE", "EXISTING_POLE"] else 1.5,
+                        "layer": text_layer,
+                        "color": 1 if text_layer == "FEATURE_LABEL" else 256,
+                        "insert": (x + 2, y)
+                    }
+                )
 
 
-    # ----------------------------
-    # Draw HP teks di titik tengah (dengan opsi rotasi)
-    # ----------------------------
+    # draw HP
     for hp in hp_items:
-        x, y = hp['xy']
-        rot_deg = hp['rotation'] if rotate_hp else 0
-        rot = math.radians(rot_deg)
-        name = hp['obj'].get("name", "")
-
-        h = 4 if "HP COVER" in hp['obj']['folder'] else 3
-        c = 6 if "HP COVER" in hp['obj']['folder'] else 7
-
-        # Estimasi lebar teks
-        text_width = len(name) * h * 0.6
-
-        # Offset ke kiri setengah lebar
-        dx = - (text_width / 2) * math.cos(rot)
-        dy = - (text_width / 2) * math.sin(rot)
-
-        # --- Replace previous msp.add_text(...) / set_pos(...) with this block ---
-# create TEXT entity and set DXF alignment attributes explicitly (compatible)
-        text = msp.add_text(
-            name,
-            dxfattribs={
-                "layer": "FEATURE_LABEL",
-                "color": c,
-                "height": h,
-            }
-        )
-        
-        # rotation must be set on the dxf record
-        text.dxf.rotation = float(rot_deg)
-        
-        # set horizontal/vertical alignment fields (0=left,1=center,2=right ; valign: 0=baseline,1=bottom,2=middle,3=top)
-        # we want middle-center
-        try:
-            # newer ezdxf uses halign/valign names
-            text.dxf.halign = 1   # center
-            text.dxf.valign = 2   # middle
-        except Exception:
-            # fallback: some builds use different attributes — ignore if not present
-            pass
-        
-        # set insertion point and align_point to the same coords so the CAD viewer will use that as center
-        text.dxf.insert = (float(x), float(y))
-        # align_point is optional in some versions, but set if available
-        try:
-            text.dxf.align_point = (float(x), float(y))
-        except Exception:
-            # ignore if attribute not supported by this ezdxf build
-            pass
-        # --------------------------------------------------------------------
-            
-
+        x,y=hp['xy'];rot=hp['rotation'];name=hp['obj'].get("name","")
+        if "HP COVER" in hp['obj']['folder']:
+            msp.add_text(name,dxfattribs={"height":6,"layer":"FEATURE_LABEL","color":6,"insert":(x,y),"rotation":rot})
+        else:
+            msp.add_text(name,dxfattribs={"height":3,"layer":"FEATURE_LABEL","color":7,"insert":(x,y),"rotation":rot})
 
     doc.saveas(output_path)
     return output_path
@@ -453,33 +386,28 @@ def run_kmz_to_dwg():
     st.sidebar.header("Rotation parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
-    rotate_hp = st.checkbox("Rotate HP Text", value=True)
 
     if uploaded_kmz:
-        tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
-        kmz_path=os.path.join(tmpdir,"uploaded.kmz")
-        with open(kmz_path,"wb") as f: f.write(uploaded_kmz.read())
-        kml_path=extract_kmz(kmz_path,tmpdir)
-        items=parse_kml(kml_path)
-        classified=classify_items(items)
-
-        template_path=None
+        extract_dir="temp_kmz";os.makedirs(extract_dir,exist_ok=True)
+        with open("temp_upload.kmz","wb") as f: f.write(uploaded_kmz.read())
+        kml_path=extract_kmz("temp_upload.kmz",extract_dir)
+        items=parse_kml(kml_path);classified=classify_items(items)
+        template_path="template_ref.dxf"
         if uploaded_template:
-            template_path=os.path.join(tmpdir,"template.dxf")
             with open(template_path,"wb") as f: f.write(uploaded_template.read())
-
-        out_path="output_smart_hp.dxf"
-        res=build_dxf_with_smart_hp(
-            classified,template_path,out_path,
-            min_seg_len=min_seg_len,max_gap_along=max_gap_along,
-            rotate_hp=rotate_hp
-        )
-        if res:
-            with open(res,"rb") as f:
-                st.download_button("⬇️ Download DXF",f,res)
+        else:
+            template_path=template_path if os.path.exists(template_path) else ""
+        output_dxf="converted_output.dxf"
+        try:
+            result=build_dxf_with_smart_hp(classified,template_path,output_dxf,
+                                           min_seg_len=min_seg_len,max_gap_along=max_gap_along)
+            if result and os.path.exists(result):
+                st.success("✅ DXF berhasil dibuat.")
+                with open(result,"rb") as f:
+                    st.download_button("⬇️ Download DXF",f,file_name=os.path.basename(result))
+            else: st.error("❌ Gagal membuat DXF.")
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
-
-
