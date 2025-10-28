@@ -108,10 +108,8 @@ def classify_items(items):
         folder = it['folder']
         if "FDT" in folder:
             classified["FDT"].append(it)
-        elif "FAT" in folder:
+        elif "FAT" in folder and folder != "FAT AREA":
             classified["FAT"].append(it)
-        elif "FAT AREA" in folder or "BOUNDARY FAT" in folder:
-            classified["BOUNDARY FAT"].append(it)
         elif "HP COVER" in folder:
             classified["HP_COVER"].append(it)
         elif "HP UNCOVER" in folder:
@@ -407,12 +405,16 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     # ----------------------------
     for hp in hp_items:
         x, y = hp['xy']
+        # Sudut rotasi dari kabel
         rot_deg = hp['rotation'] if rotate_hp else 0
-        # Koreksi agar teks tidak terbalik
-        if rot_deg > 90:
-            rot_deg -= 180
-        elif rot_deg < -90:
-            rot_deg += 180
+        
+        # Koreksi orientasi agar teks tidak terbalik di AutoCAD
+        rot_deg = (rot_deg + 360) % 360  # normalisasi 0–360
+        
+        # Jika miring terbalik (menghadap bawah), balik 180°
+        if 90 < rot_deg < 270:
+            rot_deg = (rot_deg + 180) % 360
+
 
         rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
@@ -460,7 +462,7 @@ def run_kmz_to_dwg():
     st.sidebar.header("Rotation parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
-    rotate_hp = st.checkbox("Rotate HP Text", value=True)
+    rotate_hp = st.checkbox("Rotate HP Text", value=False)
 
     if uploaded_kmz:
         tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
@@ -487,5 +489,6 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
