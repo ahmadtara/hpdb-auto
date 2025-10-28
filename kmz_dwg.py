@@ -353,10 +353,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 try:
                     if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
-                    elif layer_name in ["NEW_POLE_7_3", "POLE", "EXISTING_POLE"]:
-                        scale = 1.0   # atau 0.2 tergantung seberapa kecil mau
-                    elif layer_name in ["NEW_POLE_7_4"]:
-                        scale = 0.001   # atau 0.2 tergantung seberapa kecil mau
+                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "POLE", "EXISTING_POLE"]:
+                        scale = 0.1   # atau 0.2 tergantung seberapa kecil mau
                     else:
                         scale = 1.0
 
@@ -405,21 +403,11 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     # ----------------------------
     for hp in hp_items:
         x, y = hp['xy']
-        # Sudut rotasi dari kabel
         rot_deg = hp['rotation'] if rotate_hp else 0
-        
-        # Koreksi orientasi agar teks tidak terbalik di AutoCAD
-        rot_deg = (rot_deg + 360) % 360  # normalisasi 0–360
-        
-        # Jika miring terbalik (menghadap bawah), balik 180°
-        if 90 < rot_deg < 270:
-            rot_deg = (rot_deg + 180) % 360
-
-
         rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
 
-        h = 6 if "HP COVER" in hp['obj']['folder'] else 3
+        h = 4 if "HP COVER" in hp['obj']['folder'] else 3
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
 
         # Estimasi lebar teks
@@ -462,7 +450,7 @@ def run_kmz_to_dwg():
     st.sidebar.header("Rotation parameters")
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
-    rotate_hp = st.checkbox("Rotate HP Text", value=False)
+    rotate_hp = st.checkbox("Rotate HP Text", value=True)
 
     if uploaded_kmz:
         tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
@@ -489,6 +477,3 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
-
-
-
