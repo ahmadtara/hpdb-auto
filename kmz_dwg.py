@@ -406,6 +406,12 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     for hp in hp_items:
         x, y = hp['xy']
         rot_deg = hp['rotation'] if rotate_hp else 0
+        # Koreksi agar teks tidak terbalik
+        if rot_deg > 90:
+            rot_deg -= 180
+        elif rot_deg < -90:
+            rot_deg += 180
+
         rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
 
@@ -479,3 +485,4 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
