@@ -28,6 +28,9 @@ def run_hpdb(HERE_API_KEY):
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
+    # tambahan UI: toggle snap ke jalan
+    snap_to_road = st.checkbox("📍 Aktifkan Snap ke Jalan Terdekat (memperbaiki kolom street / AE)", value=False)
+
     # ------------------------------ #
     #  Extract placemarks from KMZ   #
     # ------------------------------ #
@@ -129,8 +132,8 @@ def run_hpdb(HERE_API_KEY):
     def reverse_here(lat, lon):
         # round to 6 decimals to unify very-close coordinates
         key = (round(float(lat), 6), round(float(lon), 6))
-        if key in reverse_cache:
-            return reverse_cache[key]
+        if key in reverse_cache and isinstance(reverse_cache[key], dict) and "rev" in reverse_cache[key]:
+            return reverse_cache[key]["rev"]
         url = f"https://revgeocode.search.hereapi.com/v1/revgeocode?at={key[0]},{key[1]}&apikey={HERE_API_KEY}&lang=en-US"
         try:
             r = session.get(url, timeout=8)
@@ -142,13 +145,63 @@ def run_hpdb(HERE_API_KEY):
                     "postalcode": comp.get("postalCode", "").upper(),
                     "street": comp.get("street", "").upper()
                 }
-                reverse_cache[key] = value
+                # store into cache under key, preserving any 'snap' entry too
+                prev = reverse_cache.get(key, {})
+                prev["rev"] = value
+                reverse_cache[key] = prev
                 return value
         except Exception:
             pass
         empty = {"district": "", "subdistrict": "", "postalcode": "", "street": ""}
-        reverse_cache[key] = empty
+        prev = reverse_cache.get(key, {})
+        prev["rev"] = empty
+        reverse_cache[key] = prev
         return empty
+
+    # ------------------------------ #
+    #   Snap-to-road function (HERE)
+    # ------------------------------ #
+    def snap_to_nearest_road(lat, lon):
+        """
+        Gunakan HERE Snap-to-Road (nearest) endpoint.
+        Jika berhasil, return dict {"lat":..., "lon":..., "street": "..."}
+        Jika gagal, return {"lat": original, "lon": original, "street": ""}
+        Hasil disimpan ke reverse_cache agar tidak ulang panggil.
+        """
+        key = (round(float(lat), 6), round(float(lon), 6))
+        # cek cache dulu (jika ada snapped hasil sebelumnya)
+        if key in reverse_cache and isinstance(reverse_cache[key], dict) and "snap" in reverse_cache[key]:
+            return reverse_cache[key]["snap"]
+
+        # endpoint snap-to-road (HERE)
+        # NOTE: endpoint ini tersedia di beberapa paket HERE; jika tidak tersedia, fungsi akan fallback
+        url = f"https://snap-to-road.hereapi.com/v1/nearest?apikey={HERE_API_KEY}&prox={lat},{lon}"
+        try:
+            r = session.get(url, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                # struktur respons: items -> first item -> position, address (street)
+                if isinstance(data, dict) and data.get("items"):
+                    itm = data["items"][0]
+                    pos = itm.get("position", {})
+                    addr = itm.get("address", {})
+                    snapped_lat = pos.get("lat", lat)
+                    snapped_lon = pos.get("lng", lon)
+                    street_name = addr.get("street", "") or ""
+                    res = {"lat": snapped_lat, "lon": snapped_lon, "street": street_name.upper()}
+                    prev = reverse_cache.get(key, {})
+                    prev["snap"] = res
+                    reverse_cache[key] = prev
+                    return res
+        except Exception:
+            pass
+
+        # jika gagal, simpan hasil kosong agar tidak retry berulang
+        res = {"lat": lat, "lon": lon, "street": ""}
+        prev = reverse_cache.get(key, {})
+        prev["snap"] = res
+        reverse_cache[key] = prev
+        return res
 
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
@@ -233,17 +286,40 @@ def run_hpdb(HERE_API_KEY):
                 block_list.append("")
                 homenumber_list.append(h["name"])
 
-            lat_list.append(h["lat"])
-            lon_list.append(h["lon"])
+            # default lat/lon from KMZ
+            orig_lat = h["lat"]
+            orig_lon = h["lon"]
+
+            # jika snap diaktifkan: coba snap ke jalan terdekat
+            if snap_to_road:
+                snap_res = snap_to_nearest_road(orig_lat, orig_lon)
+                use_lat = snap_res.get("lat", orig_lat)
+                use_lon = snap_res.get("lon", orig_lon)
+                snap_street = snap_res.get("street", "")
+            else:
+                use_lat = orig_lat
+                use_lon = orig_lon
+                snap_street = ""
+
+            lat_list.append(use_lat)
+            lon_list.append(use_lon)
+
+            # Ambil street: prioritas dari snapping jika ada, jika kosong fallback ke reverse geocode biasa
+            if snap_street:
+                # hapus awalan JALAN jika ada, dan strip
+                street_name = snap_street.replace("JALAN ", "").strip()
+            else:
+                hh = reverse_here(use_lat, use_lon)
+                street_name = hh["street"].replace("JALAN ", "").strip() if hh["street"] else ""
+
+            street_list.append(street_name)
+
+            # district/subdistrict/postalcode dari FDT base rc (sama seperti sebelumnya)
             district_list.append(rc["district"])
             subdistrict_list.append(rc["subdistrict"])
             postalcode_list.append(rc["postalcode"])
             fdtcode_list.append(fdtcode)
             oltcode_list.append(oltcode)
-
-            # street from HERE with caching
-            hh = reverse_here(h["lat"], h["lon"])
-            street_list.append(hh["street"].replace("JALAN ", "").strip() if hh["street"] else "")
 
             # find FAT item match
             mf = next((x for x in fat if fc in x["name"]), None)
