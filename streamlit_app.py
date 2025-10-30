@@ -14,7 +14,7 @@ BOT_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 st.set_page_config(page_title="MyRepublic Toolkit", layout="wide")
 
 # -------------- ✅ SESSION TIMEOUT (1 JAM) ---------------- #
-SESSION_TIMEOUT = 3600  # 1 jam = 3600 detik
+SESSION_TIMEOUT = 86400  # 1 jam = 3600 detik
 
 # -------------- ✅ USER LOGIN ---------------- #
 valid_users = {
@@ -194,6 +194,7 @@ else:
         st.session_state["user"] = None
         st.session_state["login_time"] = None
         st.rerun()
+
 
 
 
