@@ -29,7 +29,7 @@ def run_hpdb(HERE_API_KEY):
     template_file = st.file_uploader("Upload TEMPLATE HPDB (.xlsx)", type=["xlsx"])
 
     # tambahan UI: toggle snap ke jalan
-    snap_to_road = st.checkbox("📍 Aktifkan Snap ke Jalan Terdekat (memperbaiki kolom street / AE)", value=False)
+    snap_to_road = st.checkbox("📍 Aktifkan Snap ke Jalan Terdekat (memperbaiki kolom street / AE)", value=True)
     use_smart_fill = st.checkbox("🧠 Isi otomatis jalan kosong dari tetangga (Smart Fill)", value=True)
 
     # ------------------------------ #
@@ -379,7 +379,7 @@ def run_hpdb(HERE_API_KEY):
                 progress.progress(int((i + 1) * 100 / total))
 
         
-         # ✅ Tambahkan di sini, di luar loop utama
+        # ✅ Tambahkan di sini, di luar loop utama
         if use_smart_fill:
             street_list = smart_fill_streets(street_list)
         
@@ -518,4 +518,5 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
