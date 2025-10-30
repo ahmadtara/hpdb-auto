@@ -514,9 +514,23 @@ def run_hpdb(HERE_API_KEY):
 
         progress.empty()
         st.success("✅ Selesai! (logika FDT Tray/Port/Tube/Core sudah disesuaikan seperti contoh.xlsx)")
+               
+        # HITUNG & SESUAIKAN TOTAL HP COVER
+        # ================================
+        total_hp = len(hp)
+        st.info(f"📍 Total Homepass Terbaca: **{total_hp}** titik")
+
+        # Jika template punya baris lebih banyak, potong sesuai jumlah HP Cover
+        if len(df) > total_hp:
+            df = df.iloc[:total_hp].reset_index(drop=True)
+            st.warning(f"Template memiliki {len(df)} baris, dipotong menjadi {total_hp} sesuai jumlah Homepass.")
+        else:
+            st.success("Jumlah baris sudah sesuai dengan total Homepass.")
+
         st.dataframe(df.head(60))
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
