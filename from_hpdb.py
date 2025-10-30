@@ -30,6 +30,7 @@ def run_hpdb(HERE_API_KEY):
 
     # tambahan UI: toggle snap ke jalan
     snap_to_road = st.checkbox("📍 Aktifkan Snap ke Jalan Terdekat (memperbaiki kolom street / AE)", value=False)
+    use_smart_fill = st.checkbox("🧠 Isi otomatis jalan kosong dari tetangga (Smart Fill)", value=True)
 
     # ------------------------------ #
     #  Extract placemarks from KMZ   #
@@ -203,6 +204,24 @@ def run_hpdb(HERE_API_KEY):
         reverse_cache[key] = prev
         return res
 
+        # =====================================
+    # SMART FILL JALAN KOSONG (v1.0)
+    # =====================================
+    def smart_fill_streets(street_list):
+        filled = street_list.copy()
+        for i in range(len(filled)):
+            if not filled[i] or str(filled[i]).strip() == "":
+                prev_street = filled[i - 1] if i > 0 else ""
+                next_street = filled[i + 1] if i < len(filled) - 1 else ""
+                if prev_street:
+                    filled[i] = prev_street
+                elif next_street:
+                    filled[i] = next_street
+                else:
+                    filled[i] = "TANPA NAMA"
+        return filled
+
+
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
@@ -359,6 +378,11 @@ def run_hpdb(HERE_API_KEY):
             if (i % 25 == 0) or (i == n_rows - 1):
                 progress.progress(int((i + 1) * 100 / total))
 
+        
+         # ✅ Tambahkan di sini, di luar loop utama
+        if use_smart_fill:
+            street_list = smart_fill_streets(street_list)
+        
         # Assign lists to dataframe in batch (only for the rows we processed)
         idx_slice = df.index[:n_rows]
         df.loc[idx_slice, "fatcode"] = fatcode_list
@@ -494,3 +518,4 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
