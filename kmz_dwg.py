@@ -330,7 +330,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 if len(obj.get('xy_path', [])) >= 2:
                     # Jika ini HP UNCOVER → buat HATCH area
                     # Jika ini KOTAK atau HP_UNCOVER → buat HATCH area
-                    if layer_name in ["KOTAK", "HP_UNCOVER"] and add_hatch_hp_uncover:
+                    if layer_name in ["KOTAK", "HP_UNCOVER"] and add_hatch_hp_uncover and layer_name != "HP_COVER":
+
                         try:
                             xy = obj['xy_path']
                     
@@ -521,6 +522,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
