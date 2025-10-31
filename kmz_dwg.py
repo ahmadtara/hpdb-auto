@@ -322,14 +322,36 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             hp['rotation'] = best_angle
 
     # Gambar polyline & block lain
+    # Gambar polyline & block lain
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
             if obj['type'] == "path":
                 if len(obj.get('xy_path', [])) >= 2:
-                    msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
+                    # Jika ini HP UNCOVER → buat HATCH area
+                    if layer_name == "HP_UNCOVER":
+                        try:
+                            hatch = msp.add_hatch(
+                                color=256,  # ByLayer
+                                dxfattribs={"layer": "GARIS HOMEPASS"}  # layer hatch
+                            )
+                            hatch.set_pattern_fill(
+                                name="ANSI31",  # pola garis miring seperti contoh
+                                scale=11.0,
+                                angle=0
+                            )
+                            hatch.paths.add_polyline_path(
+                                obj['xy_path'],
+                                is_closed=True
+                            )
+                        except Exception as e:
+                            st.warning(f"Gagal membuat hatch HP UNCOVER: {e}")
+                    else:
+                        # path normal
+                        msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
                 elif len(obj.get('xy_path', [])) == 1:
                     msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
+
 
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
@@ -463,6 +485,8 @@ def run_kmz_to_dwg():
     min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
     max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
     rotate_hp = st.checkbox("Rotate HP Text", value=False)
+    add_hatch_hp_uncover = st.sidebar.checkbox("Tambahkan hatch untuk HP UNCOVER", value=True)
+
 
     if uploaded_kmz:
         tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
@@ -482,6 +506,7 @@ def run_kmz_to_dwg():
             classified,template_path,out_path,
             min_seg_len=min_seg_len,max_gap_along=max_gap_along,
             rotate_hp=rotate_hp
+            add_hatch_hp_uncover=add_hatch_hp_uncover
         )
         if res:
             with open(res,"rb") as f:
@@ -489,5 +514,6 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
