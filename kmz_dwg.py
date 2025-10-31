@@ -356,7 +356,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 hatch = msp.add_hatch(dxfattribs={"layer": "HP UNCOVER"})
                 # set pattern ANSI31; scale dan angle dapat disesuaikan jika perlu
                 try:
-                    hatch.set_pattern_fill("ANSI31", scale=1.0, angle=45)
+                    hatch.set_pattern_fill("ANSI31", scale=11.0000, angle=0)
                 except Exception:
                     # fallback: gunakan solid jika pattern tidak tersedia
                     try:
@@ -531,3 +531,4 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
