@@ -350,8 +350,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 (x - s, y - s)
             ]
             try:
-                # tambahkan polyline kotak di layer HP UNCOVER
-                msp.add_lwpolyline(square, close=True, dxfattribs={"layer": "HP UNCOVER"})
+            
                 # tambahkan hatch ANSI31 di layer HP UNCOVER
                 hatch = msp.add_hatch(dxfattribs={"layer": "HP UNCOVER"})
                 # set pattern ANSI31; scale dan angle dapat disesuaikan jika perlu
@@ -531,4 +530,5 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
