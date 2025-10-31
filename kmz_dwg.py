@@ -503,17 +503,19 @@ def run_kmz_to_dwg():
 
         out_path="output_smart_hp.dxf"
         res=build_dxf_with_smart_hp(
-            classified,template_path,out_path,
-            min_seg_len=min_seg_len,max_gap_along=max_gap_along,
-            rotate_hp=rotate_hp
+            classified, template_path, out_path,
+            min_seg_len=min_seg_len, max_gap_along=max_gap_along,
+            rotate_hp=rotate_hp,
             add_hatch_hp_uncover=add_hatch_hp_uncover
         )
+
         if res:
             with open(res,"rb") as f:
                 st.download_button("⬇️ Download DXF",f,res)
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
