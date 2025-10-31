@@ -462,7 +462,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
 
-        h = 6 if "HP COVER" in hp['obj']['folder'] else 3
+        h = 5 if "HP COVER" in hp['obj']['folder'] else 3
         c = 6 if "HP COVER" in hp['obj']['folder'] else 7
 
         # Estimasi lebar teks
@@ -530,5 +530,6 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
