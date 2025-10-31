@@ -228,11 +228,12 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
     return groups, hp_meta
 
 # ----------------------------
-# Main DXF builder
+# Main DXF builder (UPDATED: includes automatic HP UNCOVER box + ANSI31 hatch)
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0,
-                            rotate_hp=True, add_hatch_hp_uncover=True):
+                            rotate_hp=True, uncover_box_size=10.0):
+    # load template or create new
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
     else:
@@ -322,44 +323,60 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             hp['rotation'] = best_angle
 
     # Gambar polyline & block lain
-    # Gambar polyline & block lain
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         for obj in cat_items:
             if obj['type'] == "path":
                 if len(obj.get('xy_path', [])) >= 2:
-                    # Jika ini HP UNCOVER → buat HATCH area
-                    # Jika ini KOTAK atau HP_UNCOVER → buat HATCH area
-                    if layer_name in ["KOTAK", "HP_UNCOVER"] and add_hatch_hp_uncover and layer_name != "HP_COVER":
+                    msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
+                elif len(obj.get('xy_path', [])) == 1:
+                    msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
 
-                        try:
-                            xy = obj['xy_path']
-                    
-                            # Pastikan tertutup (loop)
-                            if xy[0] != xy[-1]:
-                                xy.append(xy[0])
-                    
-                            hatch = msp.add_hatch(
-                                color=256,  # ByLayer
-                                dxfattribs={"layer": "GARIS HOMEPASS"}  # layer hatch
-                            )
-                            hatch.set_pattern_fill(
-                                name="ANSI31",  # pola garis miring seperti contoh
-                                scale=11.0,
-                                angle=0
-                            )
-                            hatch.paths.add_polyline_path(xy, is_closed=True)
-                            # Tambahkan juga garis tepi biar tetap kelihatan kotaknya
-                            msp.add_lwpolyline(xy, dxfattribs={"layer": "GARIS HOMEPASS"})
-                    
-                        except Exception as e:
-                            st.warning(f"Gagal membuat hatch area: {e}")
-                    else:
-                        # path normal
-                        msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
+    # ----------------------------
+    # AUTO HATCH HP UNCOVER (buat kotak di titik HP UNCOVER lalu hatch ANSI31)
+    # ----------------------------
+    # uncover_box_size adalah panjang sisi kotak dalam meter (nilai diambil setelah apply_offset => unit sama)
+    half_s = uncover_box_size / 2.0
+    for obj in classified.get("HP_UNCOVER", []):
+        if obj['type'] == "point" and 'xy' in obj:
+            x, y = obj['xy']
+            s = half_s
+            # buat polygon kotak (tutup ulang)
+            square = [
+                (x - s, y - s),
+                (x + s, y - s),
+                (x + s, y + s),
+                (x - s, y + s),
+                (x - s, y - s)
+            ]
+            try:
+                # tambahkan polyline kotak di layer HP UNCOVER
+                msp.add_lwpolyline(square, close=True, dxfattribs={"layer": "HP UNCOVER"})
+                # tambahkan hatch ANSI31 di layer HP UNCOVER
+                hatch = msp.add_hatch(dxfattribs={"layer": "HP UNCOVER"})
+                # set pattern ANSI31; scale dan angle dapat disesuaikan jika perlu
+                try:
+                    hatch.set_pattern_fill("ANSI31", scale=1.0, angle=45)
+                except Exception:
+                    # fallback: gunakan solid jika pattern tidak tersedia
+                    try:
+                        hatch.set_solid_fill()
+                    except Exception:
+                        pass
+                # tambahkan path polygon ke hatch
+                # ezdxf expects a list of points for add_polyline_path
+                try:
+                    hatch.paths.add_polyline_path(square, is_closed=True)
+                except Exception:
+                    # beberapa versi ezdxf mungkin butuh format lain, fallback ke edge path
+                    try:
+                        hatch.paths.add_edge_path([("L", (square[0], square[1], square[2], square[3]))])
+                    except Exception:
+                        pass
+            except Exception as e:
+                st.warning(f"Gagal buat kotak/hatch HP UNCOVER di ({x:.3f},{y:.3f}): {e}")
 
-
-
+    # Gambar point/blocks/text lain (kecuali HP_COVER / HP_UNCOVER yang sudah diproses)
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -371,7 +388,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             block_name = None
             # prefer using block_mapping for new/existing poles
             if layer_name == "FAT" and matchblock_fat:
-                # get block name (dxf block ref or block definition)
                 block_name = matchblock_fat.name if hasattr(matchblock_fat, "name") else (matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else None)
             elif layer_name == "FDT" and matchblock_fdt:
                 block_name = matchblock_fdt.name if hasattr(matchblock_fdt, "name") else (matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else None)
@@ -383,9 +399,9 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
                     elif layer_name in ["NEW_POLE_7_3", "POLE", "EXISTING_POLE"]:
-                        scale = 1.0   # atau 0.2 tergantung seberapa kecil mau
+                        scale = 1.0
                     elif layer_name in ["NEW_POLE_7_4"]:
-                        scale = 0.001   # atau 0.2 tergantung seberapa kecil mau
+                        scale = 0.001
                     else:
                         scale = 1.0
 
@@ -436,14 +452,13 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         x, y = hp['xy']
         # Sudut rotasi dari kabel
         rot_deg = hp['rotation'] if rotate_hp else 0
-        
+
         # Koreksi orientasi agar teks tidak terbalik di AutoCAD
         rot_deg = (rot_deg + 360) % 360  # normalisasi 0–360
-        
+
         # Jika miring terbalik (menghadap bawah), balik 180°
         if 90 < rot_deg < 270:
             rot_deg = (rot_deg + 180) % 360
-
 
         rot = math.radians(rot_deg)
         name = hp['obj'].get("name", "")
@@ -453,10 +468,6 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 
         # Estimasi lebar teks
         text_width = len(name) * h * 0.6
-
-        # Offset ke kiri setengah lebar (tidak digunakan langsung karena set center)
-        dx = - (text_width / 2) * math.cos(rot)
-        dy = - (text_width / 2) * math.sin(rot)
 
         text = msp.add_text(
             name,
@@ -478,6 +489,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         except Exception:
             pass
 
+    # save dxf
     doc.saveas(output_path)
     return output_path
 
@@ -485,47 +497,37 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 # Streamlit UI
 # ----------------------------
 def run_kmz_to_dwg():
-    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation + block insertion)")
-    uploaded_kmz=st.file_uploader("📂 Upload File KMZ",type=["kmz"])
-    uploaded_template=st.file_uploader("📀 Upload Template DXF (optional)",type=["dxf"])
+    st.title("🏗️ KMZ → AUTOCAD (Smart HP rotation + block insertion + Auto Hatch HP UNCOVER)")
+    uploaded_kmz = st.file_uploader("📂 Upload File KMZ", type=["kmz"])
+    uploaded_template = st.file_uploader("📀 Upload Template DXF (optional)", type=["dxf"])
     st.sidebar.header("Rotation parameters")
-    min_seg_len=st.sidebar.slider("Min seg length (m)",5.0,100.0,15.0,1.0)
-    max_gap_along=st.sidebar.slider("Max gap along (m)",5.0,200.0,20.0,1.0)
-    rotate_hp = st.checkbox("Rotate HP Text", value=False)
-    add_hatch_hp_uncover = st.sidebar.checkbox("Tambahkan hatch untuk HP UNCOVER", value=True)
-
+    min_seg_len = st.sidebar.slider("Min seg length (m)", 5.0, 100.0, 15.0, 1.0)
+    max_gap_along = st.sidebar.slider("Max gap along (m)", 5.0, 200.0, 20.0, 1.0)
+    rotate_hp = st.sidebar.checkbox("Rotate HP Text", value=False)
+    uncover_box_size = st.sidebar.slider("Ukuran kotak HP UNCOVER (m)", 1.0, 100.0, 10.0, 1.0)
 
     if uploaded_kmz:
-        tmpdir="temp_extract"; os.makedirs(tmpdir,exist_ok=True)
-        kmz_path=os.path.join(tmpdir,"uploaded.kmz")
-        with open(kmz_path,"wb") as f: f.write(uploaded_kmz.read())
-        kml_path=extract_kmz(kmz_path,tmpdir)
-        items=parse_kml(kml_path)
-        classified=classify_items(items)
+        tmpdir = "temp_extract"; os.makedirs(tmpdir, exist_ok=True)
+        kmz_path = os.path.join(tmpdir, "uploaded.kmz")
+        with open(kmz_path, "wb") as f: f.write(uploaded_kmz.read())
+        kml_path = extract_kmz(kmz_path, tmpdir)
+        items = parse_kml(kml_path)
+        classified = classify_items(items)
 
-        template_path=None
+        template_path = None
         if uploaded_template:
-            template_path=os.path.join(tmpdir,"template.dxf")
-            with open(template_path,"wb") as f: f.write(uploaded_template.read())
+            template_path = os.path.join(tmpdir, "template.dxf")
+            with open(template_path, "wb") as f: f.write(uploaded_template.read())
 
-        out_path="output_smart_hp.dxf"
-        res=build_dxf_with_smart_hp(
+        out_path = "output_smart_hp.dxf"
+        res = build_dxf_with_smart_hp(
             classified, template_path, out_path,
             min_seg_len=min_seg_len, max_gap_along=max_gap_along,
-            rotate_hp=rotate_hp,
-            add_hatch_hp_uncover=add_hatch_hp_uncover
+            rotate_hp=rotate_hp, uncover_box_size=uncover_box_size
         )
-
         if res:
-            with open(res,"rb") as f:
-                st.download_button("⬇️ Download DXF",f,res)
+            with open(res, "rb") as f:
+                st.download_button("⬇️ Download DXF", f, res)
 
-if __name__=="__main__":
+if __name__ == "__main__":
     run_kmz_to_dwg()
-
-
-
-
-
-
-
