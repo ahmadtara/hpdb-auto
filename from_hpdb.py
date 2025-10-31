@@ -228,6 +228,8 @@ def run_hpdb(HERE_API_KEY):
     if kmz_file and template_file:
         kmz_bytes = kmz_file.read()
         placemarks = extract_placemarks(kmz_bytes)
+        st.write("Jumlah HP COVER:", len(placemarks["HP COVER"]))
+
 
         df = pd.read_excel(template_file, sheet_name="Homepass Database")
         expected_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
@@ -534,6 +536,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
