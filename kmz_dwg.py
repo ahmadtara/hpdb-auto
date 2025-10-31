@@ -232,7 +232,7 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0,
-                            rotate_hp=True):
+                            rotate_hp=True, add_hatch_hp_uncover=True):
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
     else:
@@ -514,6 +514,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
