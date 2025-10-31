@@ -329,8 +329,15 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             if obj['type'] == "path":
                 if len(obj.get('xy_path', [])) >= 2:
                     # Jika ini HP UNCOVER → buat HATCH area
-                    if layer_name == "HP_UNCOVER":
+                    # Jika ini KOTAK atau HP_UNCOVER → buat HATCH area
+                    if layer_name in ["KOTAK", "HP_UNCOVER"] and add_hatch_hp_uncover:
                         try:
+                            xy = obj['xy_path']
+                    
+                            # Pastikan tertutup (loop)
+                            if xy[0] != xy[-1]:
+                                xy.append(xy[0])
+                    
                             hatch = msp.add_hatch(
                                 color=256,  # ByLayer
                                 dxfattribs={"layer": "GARIS HOMEPASS"}  # layer hatch
@@ -340,17 +347,16 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                                 scale=11.0,
                                 angle=0
                             )
-                            hatch.paths.add_polyline_path(
-                                obj['xy_path'],
-                                is_closed=True
-                            )
+                            hatch.paths.add_polyline_path(xy, is_closed=True)
+                            # Tambahkan juga garis tepi biar tetap kelihatan kotaknya
+                            msp.add_lwpolyline(xy, dxfattribs={"layer": "GARIS HOMEPASS"})
+                    
                         except Exception as e:
-                            st.warning(f"Gagal membuat hatch HP UNCOVER: {e}")
+                            st.warning(f"Gagal membuat hatch area: {e}")
                     else:
                         # path normal
                         msp.add_lwpolyline(obj['xy_path'], dxfattribs={"layer": true_layer})
-                elif len(obj.get('xy_path', [])) == 1:
-                    msp.add_circle(center=obj['xy_path'][0], radius=0.5, dxfattribs={"layer": true_layer})
+
 
 
     for layer_name, cat_items in classified.items():
@@ -515,6 +521,7 @@ def run_kmz_to_dwg():
 
 if __name__=="__main__":
     run_kmz_to_dwg()
+
 
 
 
