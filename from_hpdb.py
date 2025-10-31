@@ -59,14 +59,18 @@ def run_hpdb(HERE_API_KEY):
                     except ValueError:
                         continue
             return None
-
+    
         def recurse_folder(folder, ns, path=""):
             items = []
             name_el = folder.find("kml:name", ns)
             folder_name = name_el.text.upper() if name_el is not None else "UNKNOWN"
             new_path = f"{path}/{folder_name}" if path else folder_name
+    
+            # folder di dalam folder
             for sub in folder.findall("kml:Folder", ns):
                 items += recurse_folder(sub, ns, new_path)
+    
+            # placemark di dalam folder ini
             for pm in folder.findall("kml:Placemark", ns):
                 nm = pm.find("kml:name", ns)
                 if nm is None:
@@ -85,29 +89,46 @@ def run_hpdb(HERE_API_KEY):
                     "description": desc_text
                 })
             return items
-
+    
         with zipfile.ZipFile(BytesIO(kmz_bytes)) as z:
             f = [f for f in z.namelist() if f.lower().endswith(".kml")][0]
             parser = etree.XMLParser(recover=True)
             root = etree.parse(z.open(f), parser=parser).getroot()
             ns = {"kml": "http://www.opengis.net/kml/2.2"}
+    
             all_pm = []
-            for folder in root.findall(".//kml:Folder", ns):
-                all_pm += recurse_folder(folder, ns)
+            for doc in root.findall(".//kml:Document", ns):
+                for folder in doc.findall("kml:Folder", ns):
+                    all_pm += recurse_folder(folder, ns)
+    
             data = {k: [] for k in [
                 "FAT",
                 "NEW POLE 7-3", "NEW POLE 7-4", "NEW POLE 9-4",
                 "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 9-4",
                 "FDT", "HP COVER"
             ]}
-
-            
+    
+            # ✅ gunakan full path, bukan hanya folder terakhir
             for p in all_pm:
+                path_upper = p["path"].upper()
                 for k in data:
-                    if k in p["path"]:
+                    if k in path_upper:
                         data[k].append(p)
                         break
+    
+            # hilangkan duplikat HP COVER
+            if data["HP COVER"]:
+                seen = set()
+                unique_hp = []
+                for item in data["HP COVER"]:
+                    key = (round(item["lat"], 6), round(item["lon"], 6))
+                    if key not in seen:
+                        seen.add(key)
+                        unique_hp.append(item)
+                data["HP COVER"] = unique_hp
+    
             return data
+
 
     def extract_fatcode(path):
         for part in path.split("/"):
@@ -534,6 +555,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
