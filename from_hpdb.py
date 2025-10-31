@@ -101,11 +101,14 @@ def run_hpdb(HERE_API_KEY):
                 "FDT", "HP COVER"
             ]}
 
+            
             for p in all_pm:
+                last_folder = p["path"].split("/")[-1].strip().upper()
                 for k in data:
-                    if k in p["path"]:
+                    if k == last_folder:
                         data[k].append(p)
                         break
+
             return data
 
     def extract_fatcode(path):
@@ -531,6 +534,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
