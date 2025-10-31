@@ -105,10 +105,9 @@ def run_hpdb(HERE_API_KEY):
             for p in all_pm:
                 last_folder = p["path"].split("/")[-1].strip().upper()
                 for k in data:
-                    if k == last_folder:
+                    if k in last_folder:  # lebih fleksibel: cocokkan substring
                         data[k].append(p)
                         break
-
             return data
 
     def extract_fatcode(path):
@@ -536,6 +535,7 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
+
 
 
 
