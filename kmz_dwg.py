@@ -186,6 +186,40 @@ def nearest_segment_angle_with_minlen(pt_xy, cable_line: LineString, min_seg_len
     return best_angle if best_angle is not None else 0.0
 
 # ----------------------------
+# PATH / ROAD helpers (untuk rotasi teks pole/fdt/fat)
+# ----------------------------
+def nearest_path_angle(x, y, paths):
+    """
+    paths: list of objects yang punya 'xy_path' = list of (x,y)
+    mengembalikan angle (derajat) segmen path terdekat ke titik (x,y)
+    """
+    min_dist = float("inf")
+    best_angle = 0.0
+    for path in paths:
+        path_coords = path.get("xy_path") or path.get("coords_xy") or []
+        # kalau masih dalam bentuk lat/lon, pastikan telah di-convert ke xy sebelumnya
+        if not path_coords:
+            continue
+        for i in range(len(path_coords) - 1):
+            x1, y1 = path_coords[i]
+            x2, y2 = path_coords[i + 1]
+            px = x2 - x1
+            py = y2 - y1
+            norm = px*px + py*py
+            if norm == 0:
+                continue
+            # project to segment
+            u = max(0, min(1, ((x - x1) * px + (y - y1) * py) / norm))
+            cx = x1 + u * px
+            cy = y1 + u * py
+            dx = cx - x
+            dy = cy - y
+            dist_sq = dx*dx + dy*dy
+            if dist_sq < min_dist:
+                min_dist = dist_sq
+                best_angle = math.degrees(math.atan2(py, px))
+    return best_angle
+# ----------------------------
 # Group HP
 # ----------------------------
 def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
@@ -232,7 +266,9 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 # ----------------------------
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0,
-                            rotate_hp=True, uncover_box_size=10.0):
+                            rotate_hp=True, uncover_box_size=10.0,
+                            rotate_fdt_fat_pole=True):
+
     # load template or create new
     if template_path and os.path.exists(template_path):
         doc = ezdxf.readfile(template_path)
@@ -376,6 +412,14 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 st.warning(f"Gagal buat kotak/hatch HP UNCOVER di ({x:.3f},{y:.3f}): {e}")
 
     # Gambar point/blocks/text lain (kecuali HP_COVER / HP_UNCOVER yang sudah diproses)
+    # Gambar point/blocks/text lain (kecuali HP_COVER / HP_UNCOVER yang sudah diproses)
+    # --- tambahan: hitung rotasi teks untuk pole/fat/fdt berdasarkan jalur (JALAN) terdekat ---
+    jalan_paths = classified.get("JALAN", [])
+    # pastikan setiap jalan diisi xy_path (sudah diisi di atas)
+    for j in jalan_paths:
+        if 'xy_path' not in j and j.get('coords'):
+            j['xy_path'] = [latlon_to_xy(lat, lon) for lat, lon in j['coords']]
+            
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -421,9 +465,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 # fallback kalau tidak ada block
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
 
-            # Tambah teks untuk point (FDT, FAT, POLE, dll.)
             text_layer = "FEATURE_LABEL" if "POLE" in layer_name else true_layer
-
+            
             # Atur warna teks sesuai kategori
             if layer_name == "FAT":
                 color_val = 2   # kuning
@@ -433,16 +476,41 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 color_val = 7   # putih
             else:
                 color_val = 256 # bylayer
+            
+            # Hanya FAT, FDT, dan POLE yang ikut rotasi jalan
+            angle = 0.0
+            if rotate_fdt_fat_pole and layer_name in ["FDT", "FAT", "POLE", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"]:
+                try:
+                    angle = nearest_path_angle(x, y, jalan_paths) if jalan_paths else 0.0
+                except Exception:
+                    angle = 0.0
 
+            
+                # normalisasi dan hindari teks terbalik
+                angle = (angle + 360) % 360
+                if 90 < angle < 270:
+                    angle = (angle + 180) % 360
+            
+                # offset sedikit tegak lurus jalan supaya teks tidak nabrak garis
+                dx = math.cos(math.radians(angle + 90)) * 2
+                dy = math.sin(math.radians(angle + 90)) * 2
+                insert_point = (x + dx, y + dy)
+            else:
+                insert_point = (x + 2, y)  # default tanpa rotasi
+            
+            # masukkan teks
             msp.add_text(
                 obj.get("name", ""),
+                insert=insert_point,
                 dxfattribs={
                     "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
                     "color": color_val,
-                    "insert": (x + 2, y)
+                    "rotation": float(angle)
                 }
             )
+
+
 
     # ----------------------------
     # Draw HP teks di titik tengah (dengan opsi rotasi)
@@ -504,6 +572,10 @@ def run_kmz_to_dwg():
     max_gap_along = st.sidebar.slider("Max gap along (m)", 5.0, 200.0, 20.0, 1.0)
     rotate_hp = st.sidebar.checkbox("Rotate HP Text", value=False)
     uncover_box_size = st.sidebar.slider("Ukuran kotak HP UNCOVER (m)", 1.0, 100.0, 10.0, 1.0)
+    rotate_fdt_fat_pole = st.sidebar.checkbox("Rotate FDT/FAT/POLE Text", value=True)
+
+
+    
 
     if uploaded_kmz:
         tmpdir = "temp_extract"; os.makedirs(tmpdir, exist_ok=True)
@@ -522,6 +594,7 @@ def run_kmz_to_dwg():
         res = build_dxf_with_smart_hp(
             classified, template_path, out_path,
             min_seg_len=min_seg_len, max_gap_along=max_gap_along,
+            rotate_hp=rotate_hp, uncover_box_size=uncover_box_size,
             rotate_hp=rotate_hp, uncover_box_size=uncover_box_size
         )
         if res:
@@ -530,6 +603,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
