@@ -267,7 +267,12 @@ def group_hp_by_cable_and_along(hp_xy_list, cables, max_gap_along=20.0):
 def build_dxf_with_smart_hp(classified, template_path, output_path,
                             min_seg_len=15.0, max_gap_along=20.0,
                             rotate_hp=True, uncover_box_size=10.0,
-                            rotate_fdt_fat_pole=True):
+                            rotate_fdt_fat_pole=True, rotate_layers=None):
+    if rotate_layers is None:
+        rotate_layers = {"FDT": True, "FAT": True, "POLE": True,
+                         "NEW_POLE_7_3": True, "NEW_POLE_7_4": True,
+                         "EXISTING_POLE": True}
+
 
     # load template or create new
     if template_path and os.path.exists(template_path):
@@ -479,7 +484,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             
             # Hanya FAT, FDT, dan POLE yang ikut rotasi jalan
             angle = 0.0
-            if rotate_fdt_fat_pole and layer_name in ["FDT", "FAT", "POLE", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"]:
+            if rotate_fdt_fat_pole and rotate_layers.get(layer_name, False):
                 try:
                     angle = nearest_path_angle(x, y, jalan_paths) if jalan_paths else 0.0
                 except Exception:
@@ -572,7 +577,18 @@ def run_kmz_to_dwg():
     max_gap_along = st.sidebar.slider("Max gap along (m)", 5.0, 200.0, 20.0, 1.0)
     rotate_hp = st.sidebar.checkbox("Rotate HP Text", value=False)
     uncover_box_size = st.sidebar.slider("Ukuran kotak HP UNCOVER (m)", 1.0, 100.0, 10.0, 1.0)
-    rotate_fdt_fat_pole = st.sidebar.checkbox("Rotate FDT/FAT/POLE Text", value=True)
+    rotate_fdt_fat_pole = st.sidebar.checkbox("Aktifkan rotasi teks jalan", value=True)
+
+    st.sidebar.markdown("### Pilih Layer yang Mau Di-Rotate")
+    rotate_layers = {
+        "FDT": st.sidebar.checkbox("FDT", value=True),
+        "FAT": st.sidebar.checkbox("FAT", value=True),
+        "POLE": st.sidebar.checkbox("POLE", value=True),
+        "NEW_POLE_7_3": st.sidebar.checkbox("NEW POLE 7-3", value=True),
+        "NEW_POLE_7_4": st.sidebar.checkbox("NEW POLE 7-4", value=True),
+        "EXISTING_POLE": st.sidebar.checkbox("EXISTING POLE", value=True)
+    }
+
 
 
     
@@ -595,14 +611,17 @@ def run_kmz_to_dwg():
             classified, template_path, out_path,
             min_seg_len=min_seg_len, max_gap_along=max_gap_along,
             rotate_hp=rotate_hp, uncover_box_size=uncover_box_size,
-            rotate_hp=rotate_hp, uncover_box_size=uncover_box_size
+            rotate_fdt_fat_pole=rotate_fdt_fat_pole, rotate_layers=rotate_layers
         )
+
+
         if res:
             with open(res, "rb") as f:
                 st.download_button("⬇️ Download DXF", f, res)
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
