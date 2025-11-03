@@ -17,7 +17,7 @@ def run_boq():
 
     kmz_bytes = kmz_file.read()
 
-    # ---------- parse KML ----------
+    # ---------- Parse KML ----------
     def recurse_folder(folder, ns, path=""):
         items = []
         name_el = folder.find("kml:name", ns)
@@ -46,7 +46,7 @@ def run_boq():
         doc = root.find("kml:Document", ns) or root
         placemarks = recurse_folder(doc, ns, path="")
 
-    # ---------- helper ----------
+    # ---------- Helper ----------
     def extract_number_from_string(s):
         if not s:
             return None
@@ -67,15 +67,15 @@ def run_boq():
         fn = foldername.upper()
         return [p for p in placemarks if fn in p["path"].split("/")]
 
-    # ---------- collect ----------
+    lines = ["A", "B", "C", "D"]
+
+    # ---------- Kumpulan Item ----------
     dist = get_items("DISTRIBUTION CABLE")
     sling = get_items("SLING WIRE")
     fat = get_items("FAT")
     hp_cover = get_items("HP COVER")
 
-    lines = ["A", "B", "C", "D"]
-
-    # ---------- Distribution ----------
+    # ---------- Distribution Cable ----------
     dist_per_line = {L: 0 for L in lines}
     for p in dist:
         for L in lines:
@@ -85,13 +85,9 @@ def run_boq():
                     dist_per_line[L] += v
                 break
 
-    # ---------- Sling wire (A–D) ----------
+    # ---------- Sling Wire ----------
     sling_items_abcd = [p for p in sling if any(f"LINE {L}" in p["path"].split("/") for L in lines)]
-    sling_nums = []
-    for p in sling_items_abcd:
-        v = extract_number_from_string(p.get("name", ""))
-        if v is not None:
-            sling_nums.append(v)
+    sling_nums = [extract_number_from_string(p.get("name", "")) for p in sling_items_abcd if extract_number_from_string(p.get("name", "")) is not None]
     sling_total = sum(sling_nums)
 
     # ---------- FAT ----------
@@ -102,42 +98,42 @@ def run_boq():
     hp_cover_counts = {L: len([p for p in hp_cover if f"LINE {L}" in p["path"].split("/")]) for L in lines}
     total_hp_cover = sum(hp_cover_counts.values())
 
-    # ---------- Poles ----------
-    def count_items_in_lines(items, lines_list=lines):
-        return len([p for p in items if any(f"LINE {L}" in p["path"].split("/") for L in lines_list)])
+    # ---------- POLE ----------
+    def count_pole_per_line(items):
+        return {L: len([p for p in items if f"LINE {L}" in p["path"].split("/")]) for L in lines}
 
-    np74_count = count_items_in_lines(get_items("NEW POLE 7-4"))
-    np73_count = count_items_in_lines(get_items("NEW POLE 7-3"))
-    np725_count = count_items_in_lines(get_items("NEW POLE 7-2.5"))
-    np94_count = count_items_in_lines(get_items("NEW POLE 9-4"))
+    new_74 = count_pole_per_line(get_items("NEW POLE 7-4"))
+    new_73 = count_pole_per_line(get_items("NEW POLE 7-3"))
+    new_725 = count_pole_per_line(get_items("NEW POLE 7-2.5"))
+    new_94 = count_pole_per_line(get_items("NEW POLE 9-4"))
 
-    exist_pole = (
-        get_items("EXISTING POLE EMR 7-4")
-        + get_items("EXISTING POLE EMR 7-3")
-        + get_items("EXISTING POLE EMR 7-2.5")
-        + get_items("EXISTING POLE EMR 9-4")
+    exist_items = (
+        get_items("EXISTING POLE EMR 7-4") +
+        get_items("EXISTING POLE EMR 7-3") +
+        get_items("EXISTING POLE EMR 7-2.5") +
+        get_items("EXISTING POLE EMR 9-4")
     )
-    exist_count = count_items_in_lines(exist_pole)
+    exist_per_line = count_pole_per_line(exist_items)
 
-    # ---------- Write to Excel ----------
+    # ---------- Write ke Excel ----------
     wb = load_workbook(template_file)
     ws = wb["BoM AE"]
 
-    # Distribution mapping
+    # Mapping distribusi
     line_map = {"A": [2, 6, 10], "B": [3, 7, 11], "C": [4, 8, 12], "D": [5, 9, 13]}
     for line, cells in line_map.items():
         cnt = fat_counts.get(line, 0)
         val = dist_per_line.get(line, 0)
-        if cnt >= 1 and cnt <= 10:
+        if 1 <= cnt <= 10:
             ws[f"C{cells[0]}"] = val
-        elif cnt >= 11 and cnt <= 15:
+        elif 11 <= cnt <= 15:
             ws[f"C{cells[1]}"] = val
-        elif cnt >= 16 and cnt <= 20:
+        elif 16 <= cnt <= 20:
             ws[f"C{cells[2]}"] = val
 
     ws["C15"] = sling_total
 
-    # FAT total -> C30..C32
+    # FAT total
     if 1 <= total_fat <= 24:
         ws["C30"] = 1
     elif 25 <= total_fat <= 36:
@@ -145,28 +141,39 @@ def run_boq():
     elif 37 <= total_fat <= 48:
         ws["C32"] = 1
 
-    ws["C36"] = fat_counts["A"]
-    ws["C37"] = fat_counts["B"]
-    ws["C38"] = fat_counts["C"]
-    ws["C39"] = fat_counts["D"]
+    ws["C36"], ws["C37"], ws["C38"], ws["C39"] = fat_counts["A"], fat_counts["B"], fat_counts["C"], fat_counts["D"]
 
-    # Poles (revisi final)
-    ws["C54"] = np74_count
-    ws["C55"] = np73_count
-    ws["C56"] = np725_count
-    ws["C58"] = np94_count
-    ws["C61"] = exist_count
+    # Pole totals
+    ws["C54"] = sum(new_74.values())
+    ws["C55"] = sum(new_73.values())
+    ws["C56"] = sum(new_725.values())
+    ws["C58"] = sum(new_94.values())
+    ws["C61"] = sum(exist_per_line.values())
 
     # Sheet BoQ NRO Cluster
     ws2 = wb["BoQ NRO Cluster"]
     ws2["O5"] = total_hp_cover
-    kmz_name = kmz_file.name.rsplit(".", 1)[0]
-    ws2["O3"] = kmz_name
+    ws2["O3"] = kmz_file.name.rsplit(".", 1)[0]
 
-    # ---------- Output ----------
+    # ---------- OUTPUT ----------
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
 
-    st.success("✅ BOQ berhasil dibuat! (download di bawah)")
+    st.success("✅ BOQ berhasil dibuat!")
+
+    # ---------- Tampilkan tabel ringkasan ----------
+    df_summary = pd.DataFrame({
+        "Line": lines,
+        "New Pole 7-4": [new_74[L] for L in lines],
+        "New Pole 7-3": [new_73[L] for L in lines],
+        "New Pole 7-2.5": [new_725[L] for L in lines],
+        "New Pole 9-4": [new_94[L] for L in lines],
+        "Existing Pole": [exist_per_line[L] for L in lines],
+    })
+    df_summary.loc["Total"] = df_summary.sum(numeric_only=True)
+    df_summary.loc["Total", "Line"] = "TOTAL"
+
+    st.dataframe(df_summary)
+
     st.download_button("📥 Download BOQ", buf.getvalue(), file_name="hasil_BOQ.xlsx")
