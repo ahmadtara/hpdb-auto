@@ -7,7 +7,6 @@ from openpyxl import load_workbook
 import pandas as pd
 
 def run_boq():
-
     st.title("📊 KMZ ➜ BOQ - 1 FDT")
 
     kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
@@ -18,16 +17,14 @@ def run_boq():
 
     kmz_bytes = kmz_file.read()
 
-    # ---------- parse KML (rekursi folder) ----------
+    # ---------- parse KML ----------
     def recurse_folder(folder, ns, path=""):
         items = []
         name_el = folder.find("kml:name", ns)
         folder_name = name_el.text.upper() if name_el is not None and name_el.text else "UNKNOWN"
         new_path = f"{path}/{folder_name}" if path else folder_name
-        # subfolders
         for sub in folder.findall("kml:Folder", ns):
             items += recurse_folder(sub, ns, new_path)
-        # placemarks
         for pm in folder.findall("kml:Placemark", ns):
             nm = pm.find("kml:name", ns)
             desc = pm.find("kml:description", ns)
@@ -49,7 +46,7 @@ def run_boq():
         doc = root.find("kml:Document", ns) or root
         placemarks = recurse_folder(doc, ns, path="")
 
-    # ---------- helper: robust number extractor ----------
+    # ---------- helper ----------
     def extract_number_from_string(s):
         if not s:
             return None
@@ -66,24 +63,19 @@ def run_boq():
             return int(''.join(parts))
         return int(parts[0])
 
-    # helper filter (match exact folder, bukan substring)
     def get_items(foldername):
         fn = foldername.upper()
         return [p for p in placemarks if fn in p["path"].split("/")]
 
-    # ---------- collect categories ---------- 
+    # ---------- collect ----------
     dist = get_items("DISTRIBUTION CABLE")
     sling = get_items("SLING WIRE")
     fat = get_items("FAT")
-    new_pole_74 = get_items("NEW POLE 7-4")
-    new_pole_73 = get_items("NEW POLE 7-3")
-    exist_pole = get_items("EXISTING POLE EMR 7-4") + get_items("EXISTING POLE EMR 7-3")
     hp_cover = get_items("HP COVER")
 
-    # ---------- calculations ----------
     lines = ["A", "B", "C", "D"]
 
-    # Distribution per line
+    # ---------- Distribution ----------
     dist_per_line = {L: 0 for L in lines}
     for p in dist:
         for L in lines:
@@ -93,52 +85,41 @@ def run_boq():
                     dist_per_line[L] += v
                 break
 
-    # Sling (hanya LINE A/B/C)
-    sling_items_abc = [p for p in sling if any(f"LINE {L}" in p["path"].split("/") for L in ["A", "B", "C"])]
+    # ---------- Sling wire (A–D) ----------
+    sling_items_abcd = [p for p in sling if any(f"LINE {L}" in p["path"].split("/") for L in lines)]
     sling_nums = []
-    for p in sling_items_abc:
+    for p in sling_items_abcd:
         v = extract_number_from_string(p.get("name", ""))
         if v is not None:
             sling_nums.append(v)
     sling_total = sum(sling_nums)
 
-    # FAT per line & total
+    # ---------- FAT ----------
     fat_counts = {L: len([p for p in fat if f"LINE {L}" in p["path"].split("/")]) for L in lines}
     total_fat = sum(fat_counts.values())
 
-    # HP COVER per line & total
+    # ---------- HP COVER ----------
     hp_cover_counts = {L: len([p for p in hp_cover if f"LINE {L}" in p["path"].split("/")]) for L in lines}
     total_hp_cover = sum(hp_cover_counts.values())
 
-    # Poles
-    def count_items_in_lines(items, lines_list=["A", "B", "C"]):
+    # ---------- Poles ----------
+    def count_items_in_lines(items, lines_list=lines):
         return len([p for p in items if any(f"LINE {L}" in p["path"].split("/") for L in lines_list)])
 
-    np74_count = count_items_in_lines(new_pole_74, ["A", "B", "C"])
-    np73_count = count_items_in_lines(new_pole_73, ["A", "B", "C"])
-    exist_count = count_items_in_lines(exist_pole, ["A", "B", "C"])
+    np74_count = count_items_in_lines(get_items("NEW POLE 7-4"))
+    np73_count = count_items_in_lines(get_items("NEW POLE 7-3"))
+    np725_count = count_items_in_lines(get_items("NEW POLE 7-2.5"))
+    np94_count = count_items_in_lines(get_items("NEW POLE 9-4"))
 
-    # ---------- show summary ----------
-    st.markdown("### 🔎 Summary from KMZ (raw counts)")
-    df_summary = pd.DataFrame([
-        {"metric": "Distribution A (desc sum)", "value": dist_per_line["A"]},
-        {"metric": "Distribution B (desc sum)", "value": dist_per_line["B"]},
-        {"metric": "Distribution C (desc sum)", "value": dist_per_line["C"]},
-        {"metric": "Distribution D (desc sum)", "value": dist_per_line["D"]},
-        {"metric": "Sling total ", "value": sling_total},
-        {"metric": "FAT total (all lines)", "value": total_fat},
-        {"metric": "FAT A (count)", "value": fat_counts["A"]},
-        {"metric": "FAT B (count)", "value": fat_counts["B"]},
-        {"metric": "FAT C (count)", "value": fat_counts["C"]},
-        {"metric": "FAT D (count)", "value": fat_counts["D"]},
-        {"metric": "HP COVER total (all lines)", "value": total_hp_cover},
-        {"metric": "NEW POLE 7-4", "value": np74_count},
-        {"metric": "NEW POLE 7-3", "value": np73_count},
-        {"metric": "EXISTING POLE EMR", "value": exist_count},
-    ])
-    st.table(df_summary)
+    exist_pole = (
+        get_items("EXISTING POLE EMR 7-4")
+        + get_items("EXISTING POLE EMR 7-3")
+        + get_items("EXISTING POLE EMR 7-2.5")
+        + get_items("EXISTING POLE EMR 9-4")
+    )
+    exist_count = count_items_in_lines(exist_pole)
 
-    # ---------- write into Excel ----------
+    # ---------- Write to Excel ----------
     wb = load_workbook(template_file)
     ws = wb["BoM AE"]
 
@@ -154,7 +135,6 @@ def run_boq():
         elif cnt >= 16 and cnt <= 20:
             ws[f"C{cells[2]}"] = val
 
-    # Sling wire
     ws["C15"] = sling_total
 
     # FAT total -> C30..C32
@@ -165,24 +145,25 @@ def run_boq():
     elif 37 <= total_fat <= 48:
         ws["C32"] = 1
 
-    # FAT per line -> C36..C39
     ws["C36"] = fat_counts["A"]
     ws["C37"] = fat_counts["B"]
     ws["C38"] = fat_counts["C"]
     ws["C39"] = fat_counts["D"]
 
-    # Poles
+    # Poles (revisi final)
     ws["C54"] = np74_count
     ws["C55"] = np73_count
-    ws["C60"] = exist_count
+    ws["C56"] = np725_count
+    ws["C58"] = np94_count
+    ws["C61"] = exist_count
 
-    # Tambahan: sheet "BoQ NRO Cluster"
+    # Sheet BoQ NRO Cluster
     ws2 = wb["BoQ NRO Cluster"]
     ws2["O5"] = total_hp_cover
     kmz_name = kmz_file.name.rsplit(".", 1)[0]
     ws2["O3"] = kmz_name
 
-    # ---------- save ----------
+    # ---------- Output ----------
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
