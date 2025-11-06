@@ -14,6 +14,7 @@ TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
 HERE_API_KEY = "k1mDEfR1Q3A_MtLqkxLrhbDcS-1oC4r7WzlgPrcv4Rk"  # <<=== Ganti dengan API Key HERE Maps kamu
 
+
 def classify_layer(hwy):
     if hwy in ['motorway', 'trunk', 'primary']:
         return 'HIGHWAYS', 14
@@ -24,6 +25,7 @@ def classify_layer(hwy):
     elif hwy in ['footway', 'path', 'cycleway']:
         return 'PATHS', 4
     return 'OTHER', DEFAULT_WIDTH
+
 
 def extract_polygon_from_kml_or_kmz(path):
     if path.endswith(".kmz"):
@@ -39,6 +41,7 @@ def extract_polygon_from_kml_or_kmz(path):
         raise Exception("❌ No Polygon found in KML/KMZ")
     return unary_union(polygons.geometry), polygons.crs
 
+
 def get_osm_roads(polygon):
     tags = {"highway": True}
     try:
@@ -51,6 +54,7 @@ def get_osm_roads(polygon):
     roads = roads.clip(polygon)
     return roads.reset_index(drop=True)
 
+
 def get_here_roads(polygon):
     minx, miny, maxx, maxy = polygon.bounds
     url = (
@@ -60,7 +64,7 @@ def get_here_roads(polygon):
     resp = requests.get(url)
     if resp.status_code != 200:
         raise Exception(f"HERE API error: {resp.text}")
-    
+
     data = resp.json()
     features = []
     for f in data.get("features", []):
@@ -71,6 +75,7 @@ def get_here_roads(polygon):
         return gpd.GeoDataFrame()
     return gpd.GeoDataFrame(features, crs="EPSG:4326")
 
+
 def strip_z(geom):
     if geom.geom_type == "LineString" and geom.has_z:
         return LineString([(x, y) for x, y, *_ in geom.coords])
@@ -80,6 +85,7 @@ def strip_z(geom):
             for line in geom.geoms
         ])
     return geom
+
 
 def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     doc = ezdxf.new()
@@ -117,6 +123,18 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
     doc.set_modelspace_vport(height=10000)
     doc.saveas(dxf_path)
 
+
+def export_to_kmz(gdf, kmz_path):
+    """Ekspor GeoDataFrame jalan menjadi KMZ"""
+    kml_path = kmz_path.replace(".kmz", ".kml")
+    gdf_wgs = gdf.to_crs("EPSG:4326")  # pastikan KML pakai lat/lon
+    gdf_wgs.to_file(kml_path, driver="KML")
+    with zipfile.ZipFile(kmz_path, "w", compression=zipfile.ZIP_DEFLATED) as kmz:
+        kmz.write(kml_path, os.path.basename(kml_path))
+    os.remove(kml_path)
+    return kmz_path
+
+
 def process_kml_to_dxf(kml_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     polygon, polygon_crs = extract_polygon_from_kml_or_kmz(kml_path)
@@ -127,10 +145,16 @@ def process_kml_to_dxf(kml_path, output_dir):
         raise Exception("❌ Tidak ada jalan ditemukan (OSM & HERE kosong).")
     geojson_path = os.path.join(output_dir, "roadmap.geojson")
     dxf_path = os.path.join(output_dir, "roadmap.dxf")
+    kmz_path = os.path.join(output_dir, "roadmap.kmz")
+
     roads_utm = roads.to_crs(TARGET_EPSG)
     roads_utm.to_file(geojson_path, driver="GeoJSON")
+
     export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs)
-    return dxf_path, geojson_path, True
+    export_to_kmz(roads, kmz_path)
+
+    return dxf_path, geojson_path, kmz_path, True
+
 
 def run_kml_dxf():
     st.title("🌍 KML/KMZ → Road Converter (OSM + HERE fallback)")
@@ -142,11 +166,12 @@ def run_kml_dxf():
                 with open(temp_input, "wb") as f:
                     f.write(kml_file.read())
                 output_dir = "/tmp/output"
-                dxf_path, geojson_path, ok = process_kml_to_dxf(temp_input, output_dir)
+                dxf_path, geojson_path, kmz_path, ok = process_kml_to_dxf(temp_input, output_dir)
                 if ok:
-                    st.success("✅ Berhasil diekspor ke DXF!")
+                    st.success("✅ Berhasil diekspor!")
                     with open(dxf_path, "rb") as f:
                         st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap.dxf")
+                    with open(kmz_path, "rb") as f:
+                        st.download_button("🌍 Download KMZ (Google Earth)", data=f, file_name="roadmap.kmz")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
-
