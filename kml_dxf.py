@@ -12,7 +12,7 @@ import json
 
 TARGET_EPSG = "EPSG:32760"
 DEFAULT_WIDTH = 10
-HERE_API_KEY = "k1mDEfR1Q3A_MtLqkxLrhbDcS-1oC4r7WzlgPrcv4Rk"  # Ganti dengan HERE API key kamu
+HERE_API_KEY = "jGCMpa59MeURAH39Vzk94kutVqC3vl714_ZvcHodX14"
 
 
 # -------------------------------------------------------------------
@@ -213,3 +213,4 @@ def run_kml_dxf():
                         st.download_button("⬇️ Download KML", data=f, file_name="roadmap.kml")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
