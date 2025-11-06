@@ -1,213 +1,152 @@
-import os
-import zipfile
-import requests
-from fastkml import kml
-import geopandas as gpd
 import streamlit as st
-import ezdxf
-from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString, shape
-from shapely.ops import unary_union, linemerge, polygonize
-import osmnx as ox
-import json
+import geopandas as gpd
+import zipfile
+import os
+from io import BytesIO
+from shapely.geometry import LineString, MultiLineString, Polygon
+from shapely.ops import unary_union
+from shapely.wkt import loads as load_wkt
+import pandas as pd
+from fastkml import kml
+import tempfile
+from pyproj import CRS
 
-TARGET_EPSG = "EPSG:32760"
-DEFAULT_WIDTH = 10
-HERE_API_KEY = "k1mDEfR1Q3A_MtLqkxLrhbDcS-1oC4r7WzlgPrcv4Rk"  # Ganti API Key HERE Maps kamu
-
-
-def classify_layer(hwy):
-    if hwy in ['motorway', 'trunk', 'primary']:
-        return 'HIGHWAYS', 14
-    elif hwy in ['secondary', 'tertiary']:
-        return 'MAJOR_ROADS', 10
-    elif hwy in ['residential', 'unclassified', 'service']:
-        return 'MINOR_ROADS', 8
-    elif hwy in ['footway', 'path', 'cycleway']:
-        return 'PATHS', 4
-    return 'OTHER', DEFAULT_WIDTH
-
-
-def extract_polygon_from_kml_or_kmz(path):
-    if path.endswith(".kmz"):
-        with zipfile.ZipFile(path, "r") as z:
-            for name in z.namelist():
-                if name.endswith(".kml"):
-                    z.extract(name, "/tmp")
-                    path = os.path.join("/tmp", name)
-                    break
-    gdf = gpd.read_file(path)
-    polygons = gdf[gdf.geometry.type.isin(["Polygon", "MultiPolygon"])]
-    if polygons.empty:
-        raise Exception("❌ No Polygon found in KML/KMZ")
-    return unary_union(polygons.geometry), polygons.crs
-
-
-def get_osm_roads(polygon):
-    tags = {"highway": True}
-    try:
-        roads = ox.features_from_polygon(polygon, tags=tags)
-    except Exception:
-        return gpd.GeoDataFrame()
-    roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
-    roads = roads.explode(index_parts=False)
-    roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
-    roads = roads.clip(polygon)
-    return roads.reset_index(drop=True)
-
-
-def get_here_roads(polygon):
-    minx, miny, maxx, maxy = polygon.bounds
-    url = (
-        f"https://vector.hereapi.com/v2/vectortiles/base/mc"
-        f"?apikey={HERE_API_KEY}&bbox={miny},{minx},{maxy},{maxx}&layers=roads"
-    )
-    resp = requests.get(url)
-    if resp.status_code != 200:
-        raise Exception(f"HERE API error: {resp.text}")
-
-    data = resp.json()
-    features = []
-    for f in data.get("features", []):
-        geom = shape(f["geometry"])
-        if geom.intersects(polygon):
-            features.append({"geometry": geom.intersection(polygon), "properties": f["properties"]})
-    if not features:
-        return gpd.GeoDataFrame()
-    return gpd.GeoDataFrame(features, crs="EPSG:4326")
-
+# ---------------------------
+# Utility Functions
+# ---------------------------
 
 def strip_z(geom):
-    if geom.geom_type == "LineString" and geom.has_z:
-        return LineString([(x, y) for x, y, *_ in geom.coords])
-    elif geom.geom_type == "MultiLineString":
-        return MultiLineString([
-            LineString([(x, y) for x, y, *_ in line.coords]) if line.has_z else line
-            for line in geom.geoms
-        ])
-    return geom
+    """Hapus koordinat Z (tinggi) dari geometri shapely."""
+    if geom is None or geom.is_empty:
+        return geom
+    try:
+        if geom.has_z:
+            coords = [(x, y) for x, y, *_ in geom.coords]
+            return type(geom)(coords)
+        elif geom.geom_type == "MultiLineString":
+            return MultiLineString([strip_z(g) for g in geom.geoms])
+        elif geom.geom_type == "Polygon":
+            exterior = [(x, y) for x, y, *_ in geom.exterior.coords]
+            interiors = [[(x, y) for x, y, *_ in ring.coords] for ring in geom.interiors]
+            return Polygon(exterior, interiors)
+        else:
+            return geom
+    except Exception:
+        return geom
 
+def classify_layer(hwy):
+    """Klasifikasi layer berdasarkan tipe jalan"""
+    if "primary" in hwy or "arterial" in hwy:
+        return "Arterial", "#FF0000"
+    elif "secondary" in hwy or "collector" in hwy:
+        return "Collector", "#FFA500"
+    elif "residential" in hwy or "local" in hwy:
+        return "Local", "#00FF00"
+    else:
+        return "Other", "#999999"
 
-def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
-    doc = ezdxf.new()
-    msp = doc.modelspace()
-    all_buffers = []
-    for _, row in gdf.iterrows():
-        geom = strip_z(row.geometry)
-        hwy = str(row.get("highway", row.get("type", "")))
-        layer, width = classify_layer(hwy)
-        if geom.is_empty or not geom.is_valid:
-            continue
-        merged = linemerge(geom) if isinstance(geom, MultiLineString) else geom
-        if isinstance(merged, (LineString, MultiLineString)):
-            buffered = merged.buffer(width / 2, resolution=8, join_style=2)
-            all_buffers.append(buffered)
-    if not all_buffers:
-        raise Exception("❌ Tidak ada garis valid untuk diekspor.")
-    all_union = unary_union(all_buffers)
-    outlines = list(polygonize(all_union.boundary))
-    min_x = min(pt[0] for geom in outlines for pt in geom.exterior.coords)
-    min_y = min(pt[1] for geom in outlines for pt in geom.exterior.coords)
-    for outline in outlines:
-        coords = [(pt[0] - min_x, pt[1] - min_y) for pt in outline.exterior.coords]
-        msp.add_lwpolyline(coords, dxfattribs={"layer": "ROADS"})
-    # add boundary
-    if polygon is not None and polygon_crs is not None:
-        poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs(TARGET_EPSG).iloc[0]
-        if poly.geom_type == 'Polygon':
-            coords = [(pt[0] - min_x, pt[1] - min_y) for pt in poly.exterior.coords]
-            msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
-        elif poly.geom_type == 'MultiPolygon':
-            for p in poly.geoms:
-                coords = [(pt[0] - min_x, pt[1] - min_y) for pt in p.exterior.coords]
-                msp.add_lwpolyline(coords, dxfattribs={"layer": "BOUNDARY"})
-    doc.set_modelspace_vport(height=10000)
-    doc.saveas(dxf_path)
-
+# ---------------------------
+# Ekspor ke KML
+# ---------------------------
 
 def export_to_kml(gdf, kml_path, polygon=None, polygon_crs=None):
-    from fastkml import kml
-    from shapely.geometry import mapping
-    from shapely.ops import transform
-    import pyproj
-
     ns = '{http://www.opengis.net/kml/2.2}'
     k = kml.KML()
     doc = kml.Document(ns, 'docid', 'RoadMap', 'Generated road map')
     k.append(doc)
 
-    # --- Tambah layer jalan --- #
+    # Pastikan CRS ke EPSG:4326 (lat/lon)
+    if gdf.crs is not None and gdf.crs.to_string() != "EPSG:4326":
+        gdf = gdf.to_crs("EPSG:4326")
+
+    # Tambahkan setiap feature
     for _, row in gdf.iterrows():
         geom = strip_z(row.geometry)
         if geom.is_empty or not geom.is_valid:
             continue
+
         hwy = str(row.get("highway", row.get("type", "")))
-        layer, _ = classify_layer(hwy)
+        layer, color = classify_layer(hwy)
 
-        placemark = kml.Placemark(ns, None, f"{layer}", f"Type: {hwy}")
-        placemark.geometry = geom  # ✅ ini aman sekarang
-        doc.append(placemark)
+        # Handle MultiLineString
+        if isinstance(geom, MultiLineString):
+            for part in geom.geoms:
+                placemark = kml.Placemark(ns, None, f"{layer}", f"Type: {hwy}", geometry=part)
+                doc.append(placemark)
+        else:
+            placemark = kml.Placemark(ns, None, f"{layer}", f"Type: {hwy}", geometry=geom)
+            doc.append(placemark)
 
-    # --- Tambah boundary polygon --- #
+    # Tambah boundary polygon jika ada
     if polygon is not None and polygon_crs is not None:
         try:
             poly = gpd.GeoSeries([polygon], crs=polygon_crs).to_crs("EPSG:4326").iloc[0]
             if poly.geom_type == 'Polygon':
-                placemark = kml.Placemark(ns, None, "BOUNDARY", "Boundary polygon")
-                placemark.geometry = poly
+                placemark = kml.Placemark(ns, None, "BOUNDARY", "Boundary polygon", geometry=poly)
                 doc.append(placemark)
             elif poly.geom_type == 'MultiPolygon':
                 for idx, p in enumerate(poly.geoms):
-                    placemark = kml.Placemark(ns, None, f"BOUNDARY_{idx+1}", "Boundary part")
-                    placemark.geometry = p
+                    placemark = kml.Placemark(ns, None, f"BOUNDARY_{idx+1}", "Boundary part", geometry=p)
                     doc.append(placemark)
         except Exception as e:
             print(f"⚠️ Boundary polygon skip: {e}")
 
-    # --- Simpan ke file --- #
     with open(kml_path, "w", encoding="utf-8") as f:
         f.write(k.to_string(prettyprint=True))
 
+# ---------------------------
+# Fungsi utama Streamlit
+# ---------------------------
 
+def run_kmz_to_kml():
+    st.title("📍 KMZ ➜ KML Converter")
 
-def process_kml_to_dxf(kml_path, output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-    polygon, polygon_crs = extract_polygon_from_kml_or_kmz(kml_path)
-    roads = get_osm_roads(polygon)
-    if roads.empty:
-        roads = get_here_roads(polygon)
-    if roads.empty:
-        raise Exception("❌ Tidak ada jalan ditemukan (OSM & HERE kosong).")
+    kmz_file = st.file_uploader("Upload file .KMZ", type=["kmz"])
+    if not kmz_file:
+        st.stop()
 
-    geojson_path = os.path.join(output_dir, "roadmap.geojson")
-    dxf_path = os.path.join(output_dir, "roadmap.dxf")
-    kml_path = os.path.join(output_dir, "roadmap.kml")
+    # Extract KMZ
+    with zipfile.ZipFile(kmz_file, 'r') as z:
+        kml_files = [f for f in z.namelist() if f.endswith('.kml')]
+        if not kml_files:
+            st.error("❌ File KMZ tidak berisi file .kml!")
+            st.stop()
 
-    roads_utm = roads.to_crs(TARGET_EPSG)
-    roads_utm.to_file(geojson_path, driver="GeoJSON")
+        kml_data = z.read(kml_files[0])
 
-    export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs)
-    export_to_kml(roads, kml_path, polygon=polygon, polygon_crs=polygon_crs)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".kml") as temp_kml:
+        temp_kml.write(kml_data)
+        temp_kml_path = temp_kml.name
 
-    return dxf_path, geojson_path, kml_path, True
+    # Baca KML jadi GeoDataFrame
+    try:
+        gdf = gpd.read_file(temp_kml_path)
+    except Exception as e:
+        st.error(f"❌ Gagal membaca KML: {e}")
+        st.stop()
 
+    st.success(f"✅ Berhasil memuat {len(gdf)} fitur dari KMZ")
 
-def run_kml_dxf():
-    st.title("🌍 KML/KMZ → Road Converter (OSM + HERE fallback)")
-    kml_file = st.file_uploader("Upload file .KML / .KMZ", type=["kml", "kmz"])
-    if kml_file:
-        with st.spinner("💫 Memproses file..."):
-            try:
-                temp_input = f"/tmp/{kml_file.name}"
-                with open(temp_input, "wb") as f:
-                    f.write(kml_file.read())
-                output_dir = "/tmp/output"
-                dxf_path, geojson_path, kml_path, ok = process_kml_to_dxf(temp_input, output_dir)
-                if ok:
-                    st.success("✅ Berhasil diekspor!")
-                    with open(dxf_path, "rb") as f:
-                        st.download_button("⬇️ Download DXF (UTM 60)", data=f, file_name="roadmap.dxf")
-                    with open(kml_path, "rb") as f:
-                        st.download_button("🌍 Download KML (Google Earth)", data=f, file_name="roadmap.kml")
-            except Exception as e:
-                st.error(f"❌ Terjadi kesalahan: {e}")
+    # Tampilkan preview
+    st.dataframe(gdf.head())
 
+    # Simpan ke KML baru
+    output_path = os.path.join(tempfile.gettempdir(), "converted_output.kml")
+    export_to_kml(gdf, output_path)
+
+    with open(output_path, "rb") as f:
+        st.download_button(
+            label="⬇️ Download Hasil KML",
+            data=f,
+            file_name="converted_output.kml",
+            mime="application/vnd.google-earth.kml+xml"
+        )
+
+    st.success("🎉 Konversi KMZ ➜ KML berhasil!")
+
+# ---------------------------
+# Jalankan Aplikasi
+# ---------------------------
+
+if __name__ == "__main__":
+    run_kmz_to_kml()
