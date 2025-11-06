@@ -14,8 +14,8 @@ from statistics import mean
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 target_folders = {
-    'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
-    'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
+    'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4', 'NEW POLE 7-2.5', 'NEW POLE 9-4', 
+    'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3', 'EXISTING POLE EMR 9-4',
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
 
@@ -101,7 +101,7 @@ def apply_offset(points_xy):
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER",
-        "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE",
+        "NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE", "POLE",
         "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
     for it in items:
@@ -118,6 +118,10 @@ def classify_items(items):
             classified["NEW_POLE_7_3"].append(it)
         elif "NEW POLE 7-4" in folder:
             classified["NEW_POLE_7_4"].append(it)
+        elif "NEW POLE 7-2.5" in folder:
+            classified["NEW_POLE_7_2.5"].append(it)
+        elif "NEW POLE 9-4" in folder:
+            classified["NEW_POLE_9_4"].append(it)
         elif "EXISTING POLE" in folder or "EMR" in folder:
             classified["EXISTING_POLE"].append(it)
         elif "BOUNDARY" in folder:
@@ -270,7 +274,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                             rotate_fdt_fat_pole=True, rotate_layers=None):
     if rotate_layers is None:
         rotate_layers = {"FDT": True, "FAT": True, "POLE": True,
-                         "NEW_POLE_7_3": True, "NEW_POLE_7_4": True,
+                         "NEW_POLE_7_3": True, "NEW_POLE_7_4": True, "NEW_POLE_7_2.5": True, "NEW_POLE_9_4": True,
                          "EXISTING_POLE": True}
 
 
@@ -284,9 +288,11 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     block_mapping = {
         "FDT": "FDT",
         "FAT": "FAT",
-        "POLE": "A$C14dd5346",
-        "NEW_POLE_7_3": "A$C14dd5346",
+        "POLE": "np7",
+        "NEW_POLE_7_3": "np7",
         "NEW_POLE_7_4": "np9",
+        "NEW_POLE_7_2.5": "np72",
+        "NEW_POLE_9_4": "np94",
         "EXISTING_POLE": "A$Cdb6fd7d1"
     }
 
@@ -439,14 +445,14 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 block_name = matchblock_fat.name if hasattr(matchblock_fat, "name") else (matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else None)
             elif layer_name == "FDT" and matchblock_fdt:
                 block_name = matchblock_fdt.name if hasattr(matchblock_fdt, "name") else (matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else None)
-            elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE"]:
+            elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE", "POLE"]:
                 block_name = block_mapping.get(layer_name)
 
             if block_name:
                 try:
                     if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
-                    elif layer_name in ["NEW_POLE_7_3", "POLE", "EXISTING_POLE"]:
+                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "POLE", "EXISTING_POLE"]:
                         scale = 1.0
                     elif layer_name in ["NEW_POLE_7_4"]:
                         scale = 0.001
@@ -475,7 +481,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
             # Atur warna teks sesuai kategori
             if layer_name == "FAT":
                 color_val = 2   # kuning
-            elif layer_name in ["FDT", "NEW_POLE_7_3", "NEW_POLE_7_4", "POLE"]:
+            elif layer_name in ["FDT", "NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "POLE"]:
                 color_val = 1   # merah
             elif layer_name == "EXISTING_POLE":
                 color_val = 7   # putih
@@ -508,7 +514,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 obj.get("name", ""),
                 dxfattribs={
                     "insert": insert_point,
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE"] else 1.5,
+                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
                     "color": color_val,
                     "rotation": float(angle)
@@ -587,12 +593,10 @@ def run_kmz_to_dwg():
         "POLE": st.sidebar.checkbox("POLE", value=True),
         "NEW_POLE_7_3": st.sidebar.checkbox("NEW POLE 7-3", value=True),
         "NEW_POLE_7_4": st.sidebar.checkbox("NEW POLE 7-4", value=True),
+        "NEW_POLE_7_2.5": st.sidebar.checkbox("NEW POLE 7-4", value=True),
+        "NEW_POLE_9_4": st.sidebar.checkbox("NEW POLE 7-4", value=True),
         "EXISTING_POLE": st.sidebar.checkbox("EXISTING POLE", value=True)
     }
-
-
-
-    
 
     if uploaded_kmz:
         tmpdir = "temp_extract"; os.makedirs(tmpdir, exist_ok=True)
@@ -622,6 +626,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
