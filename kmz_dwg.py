@@ -288,10 +288,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     block_mapping = {
         "FDT": "FDT",
         "FAT": "FAT",
-        "POLE": "np7",
-        "NEW_POLE_7_3": "np7",
-        "NEW_POLE_7_4": "np9",
-        "NEW_POLE_7_2.5": "np72",
+        "POLE": "np733",
+        "NEW_POLE_7_3": "np733",
+        "NEW_POLE_7_4": "np99",
+        "NEW_POLE_7_2.5": "np722",
         "NEW_POLE_9_4": "np94",
         "EXISTING_POLE": "A$Cdb6fd7d1"
     }
@@ -626,6 +626,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
