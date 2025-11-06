@@ -145,49 +145,80 @@ def export_to_dxf(gdf, dxf_path, polygon=None, polygon_crs=None):
 # 🔹 Export ke KML
 # -------------------------------------------------------------------
 def export_to_kml(gdf, kml_path):
-    k = kml.KML()
+    """
+    Export GeoDataFrame -> KML safely.
+    Handles: CRS -> EPSG:4326, WKT-string geometries, Multi* splitting.
+    """
+    from fastkml import kml
+    from shapely.geometry import shape as shapely_shape, MultiLineString, MultiPolygon, Polygon, LineString
+    from shapely import wkt
+
     ns = '{http://www.opengis.net/kml/2.2}'
+    k = kml.KML()
     doc = kml.Document(ns, 'docid', 'Road Export', 'Roadmap Exported from Python')
     k.append(doc)
     folder = kml.Folder(ns, 'f1', 'Roads', 'Extracted Roads')
     doc.append(folder)
 
-    for _, row in gdf.iterrows():
-        geom = strip_z(row.geometry)
-        if geom.is_empty:
-            continue
-        name = str(row.get("highway", "road"))
-        placemark = kml.Placemark(ns, None, name, "")
-        placemark.geometry = geom
-        folder.append(placemark)
+    # pastikan ada kolom geometry dan CRS
+    if getattr(gdf, "crs", None) is not None and gdf.crs.to_string() != "EPSG:4326":
+        try:
+            gdf = gdf.to_crs("EPSG:4326")
+        except Exception:
+            # kalau gagal, lanjutkan — kita coba tetap proses tiap fitur
+            pass
 
+    for idx, row in gdf.iterrows():
+        geom = row.geometry
+
+        # jika geometry adalah string (WKT atau geojson string), coba parse
+        if isinstance(geom, str):
+            try:
+                geom = wkt.loads(geom)
+            except Exception:
+                # coba interpret sebagai geojson mapping string -> skip kalau gagal
+                try:
+                    import json
+                    gm = json.loads(geom)
+                    geom = shapely_shape(gm)
+                except Exception:
+                    # skip feature
+                    print(f"⚠️ Skip feature {idx}: geometry string parse failed")
+                    continue
+
+        # jika None atau empty skip
+        if geom is None:
+            continue
+        try:
+            geom = strip_z(geom)
+        except Exception:
+            pass
+        if getattr(geom, "is_empty", False) or not getattr(geom, "is_valid", True):
+            continue
+
+        name = str(row.get("highway", row.get("type", "road")))
+
+        # jika MultiLineString/MultiPolygon: buat multiple placemark
+        if isinstance(geom, (MultiLineString, MultiPolygon)):
+            parts = geom.geoms
+        else:
+            parts = [geom]
+
+        for part in parts:
+            # final safety: ensure part is shapely geom
+            if isinstance(part, (LineString, Polygon)) or hasattr(part, "__geo_interface__"):
+                try:
+                    pm = kml.Placemark(ns, None, name, "", geometry=part)
+                    folder.append(pm)
+                except Exception as e:
+                    print(f"⚠️ Could not append placemark for feature {idx}: {e}")
+            else:
+                print(f"⚠️ Skipping non-geometry part for feature {idx}")
+
+    # tulis file
     with open(kml_path, "w", encoding="utf-8") as f:
         f.write(k.to_string(prettyprint=True))
 
-
-# -------------------------------------------------------------------
-# 🔹 Proses utama
-# -------------------------------------------------------------------
-def process_kml_to_dxf(kml_path, output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-    polygon, polygon_crs = extract_polygon_from_kml_or_kmz(kml_path)
-    roads = get_osm_roads(polygon)
-    if roads.empty:
-        roads = get_here_roads(polygon)
-    if roads.empty:
-        raise Exception("❌ Tidak ada jalan ditemukan (OSM & HERE kosong).")
-
-    geojson_path = os.path.join(output_dir, "roadmap.geojson")
-    dxf_path = os.path.join(output_dir, "roadmap.dxf")
-    kml_path_out = os.path.join(output_dir, "roadmap.kml")
-
-    roads_utm = roads.to_crs(TARGET_EPSG)
-    roads_utm.to_file(geojson_path, driver="GeoJSON")
-
-    export_to_dxf(roads_utm, dxf_path, polygon=polygon, polygon_crs=polygon_crs)
-    export_to_kml(roads, kml_path_out)
-
-    return dxf_path, geojson_path, kml_path_out, True
 
 
 # -------------------------------------------------------------------
@@ -213,4 +244,5 @@ def run_kml_dxf():
                         st.download_button("⬇️ Download KML", data=f, file_name="roadmap.kml")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
 
