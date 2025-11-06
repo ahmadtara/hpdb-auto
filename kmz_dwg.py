@@ -288,11 +288,11 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     block_mapping = {
         "FDT": "FDT",
         "FAT": "FAT",
-        "POLE": "np733",
-        "NEW_POLE_7_3": "np733",
-        "NEW_POLE_7_4": "np99",
+        "POLE": "np733fix",
+        "NEW_POLE_7_3": "np733fix",
+        "NEW_POLE_7_4": "np744fix",
         "NEW_POLE_7_2.5": "np722",
-        "NEW_POLE_9_4": "np94",
+        "NEW_POLE_9_4": "np99fix",
         "EXISTING_POLE": "A$Cdb6fd7d1"
     }
 
@@ -452,10 +452,10 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 try:
                     if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
-                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "POLE", "EXISTING_POLE"]:
+                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "POLE", "EXISTING_POLE"]:
                         scale = 1.0
-                    elif layer_name in ["NEW_POLE_7_4"]:
-                        scale = 0.001
+                    # elif layer_name in ["NEW_POLE_7_4"]:
+                     #    scale = 0.001
                     else:
                         scale = 1.0
 
@@ -626,6 +626,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
