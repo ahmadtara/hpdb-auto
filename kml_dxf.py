@@ -9,10 +9,7 @@ from shapely.ops import unary_union, linemerge, polygonize
 import osmnx as ox
 import json
 from shapely import wkt
-from kml_dxf import run_kml_dxf
 
-if __name__ == "__main__":
-    run_kml_dxf()
 
 # ----------------------------
 # KONFIGURASI
@@ -533,6 +530,7 @@ def run_kml_dxf():
                         st.download_button("⬇️ Download KML", data=f, file_name="roadmap.kml")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
 
 
 
