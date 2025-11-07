@@ -101,66 +101,72 @@ def get_here_roads(polygon):
 # ---------------------- EXPORT TO KML (simplekml) ----------------------
 def export_to_kml_simple(gdf, polygon, output_path, include_geojson=False):
     """
-    Export roads GeoDataFrame (EPSG:4326) and polygon boundary to a KML file using simplekml.
-    This version safely handles 2D/3D coordinates by taking only lon/lat components.
+    Export roads GeoDataFrame (EPSG:4326) dan polygon boundary ke KML (pakai buffer area biar mirip DXF)
     """
+    from shapely.ops import unary_union
+    from shapely.geometry import MultiPolygon
+
+    # Lebar relatif antar tipe jalan
+    WIDTH_MAP = {
+        "HIGHWAYS": 14,
+        "MAJOR_ROADS": 10,
+        "MINOR_ROADS": 8,
+        "PATHS": 4,
+        "OTHER": 3
+    }
+
     kml_obj = simplekml.Kml()
 
-    # Boundary: create polygon placemark(s)
+    # Boundary
     if polygon is not None:
         if isinstance(polygon, Polygon):
             outer = [(coord[0], coord[1]) for coord in polygon.exterior.coords]
             pol = kml_obj.newpolygon(name="Boundary")
             pol.outerboundaryis = outer
-            pol.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.blue)
+            pol.style.polystyle.color = simplekml.Color.changealphaint(60, simplekml.Color.blue)
         elif isinstance(polygon, MultiPolygon):
             for i, p in enumerate(polygon.geoms):
                 outer = [(coord[0], coord[1]) for coord in p.exterior.coords]
                 pol = kml_obj.newpolygon(name=f"Boundary_{i+1}")
                 pol.outerboundaryis = outer
-                pol.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.blue)
+                pol.style.polystyle.color = simplekml.Color.changealphaint(60, simplekml.Color.blue)
 
-    # Roads: iterate row-per-row; MultiLineString parts become separate LineString placemarks
-    for idx, row in gdf.iterrows():
+    # Buffer tiap jalan (seperti DXF)
+    buffered_polygons = []
+    for _, row in gdf.iterrows():
         geom = row.geometry
         if geom is None or geom.is_empty or not geom.is_valid:
             continue
         hwy = str(row.get("highway", row.get("type", "")))
         layer = classify_layer(hwy)
-        style = COLOR_MAP.get(layer, COLOR_MAP["OTHER"])
-
-        if isinstance(geom, LineString):
-            coords = [(coord[0], coord[1]) for coord in geom.coords]
-            if len(coords) < 2:
-                continue
-            ls = kml_obj.newlinestring(name=layer, description=f"highway={hwy}")
-            ls.coords = coords
-            ls.style.linestyle.width = style["width"]
-            ls.style.linestyle.color = style["color"]
-        elif isinstance(geom, MultiLineString):
-            for i, part in enumerate(geom.geoms):
-                coords = [(coord[0], coord[1]) for coord in part.coords]
-                if len(coords) < 2:
-                    continue
-                ls = kml_obj.newlinestring(name=f"{layer}_{i+1}", description=f"highway={hwy}")
-                ls.coords = coords
-                ls.style.linestyle.width = style["width"]
-                ls.style.linestyle.color = style["color"]
-        else:
-            # skip non-line geometries
+        width = WIDTH_MAP.get(layer, 6)
+        try:
+            buffered = geom.buffer(width / 100000.0, resolution=6, join_style=2)  # width kecil (deg)
+            buffered_polygons.append((buffered, layer))
+        except Exception:
             continue
 
-    # save KML
+    # Gabungkan & ekspor ke KML sebagai Polygon
+    for geom, layer in buffered_polygons:
+        color = COLOR_MAP.get(layer, COLOR_MAP["OTHER"])["color"]
+        if isinstance(geom, (Polygon, MultiPolygon)):
+            for poly in getattr(geom, "geoms", [geom]):
+                outer = [(coord[0], coord[1]) for coord in poly.exterior.coords]
+                pol = kml_obj.newpolygon(name=layer)
+                pol.outerboundaryis = outer
+                pol.style.polystyle.color = simplekml.Color.changealphaint(120, color)
+                pol.style.linestyle.color = color
+                pol.style.linestyle.width = 1
+
     kml_obj.save(output_path)
 
-    # optional: save geojson for debugging
     if include_geojson:
         geojson_path = os.path.splitext(output_path)[0] + ".geojson"
         try:
-            # write only lines to geojson
             gdf.to_file(geojson_path, driver="GeoJSON")
         except Exception:
             pass
+
 
 # ---------------------- PROSES UTAMA ----------------------
 def process_kml_to_kml(kml_path, output_dir, include_geojson=False):
@@ -204,4 +210,5 @@ def run_kml_dxf():
                             st.download_button("⬇️ Download GeoJSON", data=gf, file_name="roadmap.geojson")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
 
