@@ -577,16 +577,18 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 insert_point = (x + 2, y)  # default tanpa rotasi
             
             # masukkan teks
-            msp.add_text(
+            text = msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
-                    "insert": insert_point,
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"] else 1.5,
+                    "height": 5.0 if layer_name in ["FDT","FAT","NEW_POLE_7_3","NEW_POLE_7_4","NEW_POLE_7_2.5","NEW_POLE_9_4","EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
                     "color": color_val,
                     "rotation": float(angle)
                 }
             )
+            
+            text.dxf.insert = tuple(insert_point)
+            text.dxf.align_point = tuple(insert_point)
 
 
 
