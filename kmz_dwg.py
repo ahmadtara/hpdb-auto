@@ -536,8 +536,9 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     angle = (angle + 180) % 360
             
                 # offset sedikit tegak lurus jalan supaya teks tidak nabrak garis
-                dx = math.cos(math.radians(angle + 90)) * 2
-                dy = math.sin(math.radians(angle + 90)) * 2
+                offset_dist = 4  # jarak teks dari blok
+                dx = math.cos(math.radians(angle - 90)) * offset_dist
+                dy = math.sin(math.radians(angle - 90)) * offset_dist
                 insert_point = (x + dx, y + dy)
             else:
                 insert_point = (x + 2, y)  # default tanpa rotasi
@@ -664,6 +665,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
