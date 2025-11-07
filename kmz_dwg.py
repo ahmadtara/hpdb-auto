@@ -330,7 +330,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
 
     layer_mapping = {
         "BOUNDARY": "FAT AREA",
-        "DISTRIBUTION_CABLE": "FO 36 CORE",
+        "DISTRIBUTION_CABLE": "FO 24 CORE",
         "SLING_WIRE": "STRAND UG",
         "KOTAK": "GARIS HOMEPASS",
         "JALAN": "JALAN"
@@ -622,3 +622,4 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
