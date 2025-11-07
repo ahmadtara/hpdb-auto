@@ -547,7 +547,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 # --- Jarak kecil dari blok biar gak nabrak ---
                 # --- OFFSET TEGAK LURUS JALAN (ANTI NABRAK) ---
                 # ---------- SMART OFFSET ANTI TABRAK ----------
-                offset_dist = text_height * 0.6  # agak jauh biar aman
+                offset_dist = text_height * 1.2  # agak jauh biar aman
                 
                 # dua sisi kemungkinan
                 block_angle = block_rotation  # rotasi block yang sudah dihitung benar
@@ -714,6 +714,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
