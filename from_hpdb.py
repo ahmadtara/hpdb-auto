@@ -260,11 +260,13 @@ def run_hpdb(HERE_API_KEY):
 
         all_poles = (
             placemarks["NEW POLE 7-3"]
+            + placemarks["NEW POLE 7-2.5"]
             + placemarks["NEW POLE 7-4"]
             + placemarks["NEW POLE 9-4"]
             + placemarks["EXISTING POLE EMR 7-3"]
             + placemarks["EXISTING POLE EMR 7-4"]
             + placemarks["EXISTING POLE EMR 9-4"]
+            + placemarks["EXISTING POLE EMR 7-2.5"]
         )
 
         # fdt reverse geocode base values
@@ -555,11 +557,3 @@ def run_hpdb(HERE_API_KEY):
         buf = BytesIO()
         df.to_excel(buf, index=False)
         st.download_button("📥 Download Hasil", buf.getvalue(), file_name="hasil_hpdb.xlsx")
-
-
-
-
-
-
-
-
