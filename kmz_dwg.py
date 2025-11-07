@@ -543,7 +543,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 ] else 1.5
                 
                 # offset berdasarkan tinggi teks
-                base_offset = text_height * 1.2
+                base_offset = 0.7
                 dx = math.cos(math.radians(angle - 90)) * base_offset
                 dy = math.sin(math.radians(angle - 90)) * base_offset
                 insert_point = [x + dx, y + dy]
@@ -698,3 +698,4 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
