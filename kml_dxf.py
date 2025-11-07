@@ -1,16 +1,17 @@
+# kml_converter.py
 import os
 import zipfile
 import requests
 import geopandas as gpd
 import streamlit as st
 import osmnx as ox
-import json
 from shapely.geometry import shape, LineString, MultiLineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
 import simplekml
 
 HERE_API_KEY = "jGCMpa59MeURAH39Vzk94kutVqC3vl714_ZvcHodX14"
 
+# ---------------------- KLASIFIKASI JALAN ----------------------
 def classify_layer(hwy):
     if hwy in ['motorway', 'trunk', 'primary']:
         return 'HIGHWAYS'
@@ -22,6 +23,16 @@ def classify_layer(hwy):
         return 'PATHS'
     return 'OTHER'
 
+# warna + width per kategori untuk simplekml
+COLOR_MAP = {
+    "HIGHWAYS": {"color": simplekml.Color.yellow, "width": 4},
+    "MAJOR_ROADS": {"color": simplekml.Color.orange, "width": 3},
+    "MINOR_ROADS": {"color": simplekml.Color.white, "width": 2},
+    "PATHS": {"color": simplekml.Color.green, "width": 1.5},
+    "OTHER": {"color": simplekml.Color.gray, "width": 1}
+}
+
+# ---------------------- EKSTRAK POLIGON ----------------------
 def extract_polygon_from_kml_or_kmz(path):
     if path.endswith(".kmz"):
         with zipfile.ZipFile(path, "r") as z:
@@ -37,27 +48,36 @@ def extract_polygon_from_kml_or_kmz(path):
     # pastikan geometry dalam EPSG:4326
     if polygons.crs is not None:
         polygons = polygons.to_crs("EPSG:4326")
+    # unary_union untuk gabungkan multipolygon/parts
     return unary_union(polygons.geometry), polygons.crs or "EPSG:4326"
 
+# ---------------------- AMBIL DATA JALAN DARI OSM ----------------------
 def get_osm_roads(polygon):
     tags = {"highway": True}
     try:
         roads = ox.features_from_polygon(polygon, tags=tags)
     except Exception:
         return gpd.GeoDataFrame()
+    # filter hanya garis
     roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
-    roads = roads.explode(index_parts=False)
+    # flatten multi-part rows
+    try:
+        roads = roads.explode(index_parts=False)
+    except TypeError:
+        # older geopandas uses different explode signature
+        roads = roads.explode()
     roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
     # pastikan CRS 4326
     if roads.crs is not None:
         roads = roads.to_crs("EPSG:4326")
+    # clip atau fallback intersects
     try:
         roads = roads.clip(polygon)
     except Exception:
-        # fallback: filter by intersects if clip gagal
         roads = roads[roads.intersects(polygon)]
     return roads.reset_index(drop=True)
 
+# ---------------------- OPSI FALLBACK: HERE API ----------------------
 def get_here_roads(polygon):
     minx, miny, maxx, maxy = polygon.bounds
     url = (
@@ -79,65 +99,66 @@ def get_here_roads(polygon):
     gdf = gpd.GeoDataFrame(features, crs="EPSG:4326")
     return gdf
 
-def _linestring_coords_for_kml(geom):
-    """Return list of (lon, lat) coordinates appropriate for simplekml."""
-    if isinstance(geom, LineString):
-        return [(x, y) for x, y in geom.coords]
-    elif isinstance(geom, MultiLineString):
-        # return list of lists for MultiLineString (we will create MultiGeometry)
-        parts = []
-        for line in geom.geoms:
-            parts.append([(x, y) for x, y in line.coords])
-        return parts
-    return []
-
-def export_to_kml_simple(gdf, polygon, output_path):
+# ---------------------- EXPORT TO KML (simplekml) ----------------------
+def export_to_kml_simple(gdf, polygon, output_path, include_geojson=False):
     """
     Export roads GeoDataFrame (EPSG:4326) and polygon boundary to a KML file using simplekml.
+    Optionally also export a GeoJSON for debugging.
     """
     kml_obj = simplekml.Kml()
-    # Boundary as a Polygon Placemark (outer boundary only)
+
+    # Boundary: create polygon placemark(s)
     if polygon is not None:
-        # polygon may be Polygon or MultiPolygon
         if isinstance(polygon, Polygon):
             outer = [(x, y) for x, y in polygon.exterior.coords]
             pol = kml_obj.newpolygon(name="Boundary")
             pol.outerboundaryis = outer
+            pol.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.blue)
         elif isinstance(polygon, MultiPolygon):
-            # create one polygon placemark per part
             for i, p in enumerate(polygon.geoms):
                 outer = [(x, y) for x, y in p.exterior.coords]
                 pol = kml_obj.newpolygon(name=f"Boundary_{i+1}")
                 pol.outerboundaryis = outer
+                pol.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.blue)
 
-    # Roads: create one placemark per LineString (or one MultiGeometry for MultiLine)
+    # Roads: iterate row-per-row; MultiLineString parts become separate LineString placemarks
     for idx, row in gdf.iterrows():
         geom = row.geometry
         if geom is None or geom.is_empty or not geom.is_valid:
             continue
         hwy = str(row.get("highway", row.get("type", "")))
         layer = classify_layer(hwy)
-        # set simple style (optional): name, description
-        name = layer
-        desc = f"highway={hwy}"
+        style = COLOR_MAP.get(layer, COLOR_MAP["OTHER"])
+
         if isinstance(geom, LineString):
-            ls = kml_obj.newlinestring(name=name, description=desc)
+            ls = kml_obj.newlinestring(name=layer, description=f"highway={hwy}")
             ls.coords = [(x, y) for x, y in geom.coords]
-            ls.style.linestyle.width = 2
+            ls.style.linestyle.width = style["width"]
+            ls.style.linestyle.color = style["color"]
         elif isinstance(geom, MultiLineString):
-            # add each part as a linestring (so all parts visible)
             for i, part in enumerate(geom.geoms):
-                ls = kml_obj.newlinestring(name=f"{name}_{i+1}", description=desc)
+                ls = kml_obj.newlinestring(name=f"{layer}_{i+1}", description=f"highway={hwy}")
                 ls.coords = [(x, y) for x, y in part.coords]
-                ls.style.linestyle.width = 2
+                ls.style.linestyle.width = style["width"]
+                ls.style.linestyle.color = style["color"]
         else:
-            # ignore non-line geometries
+            # skip non-line geometries
             continue
 
-    # save
+    # save KML
     kml_obj.save(output_path)
 
-def process_kml_to_kml(kml_path, output_dir):
+    # optional: save geojson for debugging
+    if include_geojson:
+        geojson_path = os.path.splitext(output_path)[0] + ".geojson"
+        try:
+            gdf.to_file(geojson_path, driver="GeoJSON")
+        except Exception:
+            # ignore failures to write geojson
+            pass
+
+# ---------------------- PROSES UTAMA ----------------------
+def process_kml_to_kml(kml_path, output_dir, include_geojson=False):
     os.makedirs(output_dir, exist_ok=True)
     polygon, polygon_crs = extract_polygon_from_kml_or_kmz(kml_path)
     roads = get_osm_roads(polygon)
@@ -150,12 +171,14 @@ def process_kml_to_kml(kml_path, output_dir):
         roads = roads.to_crs("EPSG:4326")
 
     kml_output = os.path.join(output_dir, "roadmap.kml")
-    export_to_kml_simple(roads, polygon, kml_output)
+    export_to_kml_simple(roads, polygon, kml_output, include_geojson=include_geojson)
     return kml_output, True
-# ---------------------- STREAMLIT APP ----------------------
 
+# ---------------------- STREAMLIT APP ----------------------
 def run_kml_dxf():
     st.title("🌍 KML/KMZ → KML Road Converter (OSM + HERE Fallback)")
+    st.markdown("Upload file KML/KMZ yang berisi POLYGON area yang akan diambil jalan-jalannya.")
+    include_geojson = st.checkbox("Simpan juga GeoJSON (opsional, untuk debugging)", value=True)
     kml_file = st.file_uploader("Upload file .KML / .KMZ", type=["kml", "kmz"])
     if kml_file:
         with st.spinner("💫 Memproses file..."):
@@ -164,12 +187,15 @@ def run_kml_dxf():
                 with open(temp_input, "wb") as f:
                     f.write(kml_file.read())
                 output_dir = "/tmp/output"
-                kml_path, ok = process_kml_to_kml(temp_input, output_dir)
+                kml_path, ok = process_kml_to_kml(temp_input, output_dir, include_geojson=include_geojson)
                 if ok:
                     st.success("✅ Berhasil diekspor ke KML!")
                     with open(kml_path, "rb") as f:
                         st.download_button("⬇️ Download KML", data=f, file_name="roadmap.kml")
+                    # show geojson link if exists
+                    geojson_path = os.path.splitext(kml_path)[0] + ".geojson"
+                    if include_geojson and os.path.exists(geojson_path):
+                        with open(geojson_path, "rb") as gf:
+                            st.download_button("⬇️ Download GeoJSON", data=gf, file_name="roadmap.geojson")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
-
-
