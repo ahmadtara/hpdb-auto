@@ -430,7 +430,17 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     for j in jalan_paths:
         if 'xy_path' not in j and j.get('coords'):
             j['xy_path'] = [latlon_to_xy(lat, lon) for lat, lon in j['coords']]
-            
+
+
+    # KUMPULKAN SEMUA TITIK POLE (UNTUK ANTI TABRAK)
+    # --------------------------------------------
+    pole_points = []
+    for key in ["POLE", "NEW_POLE_7_3", "NEW_POLE_7_4",
+                "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"]:
+        for obj in classified.get(key, []):
+            if obj['type'] == 'point' and 'xy' in obj:
+                pole_points.append(Point(obj['xy']))
+                            
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -543,54 +553,34 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 ] else 1.5
                 
                 
+                # -----------------------------
+                #  SMART OFFSET ANTI TABRAK POLE
+                # -----------------------------
+                offset_dist = text_height * 1.3   # aman sedikit lebih jauh
                 
-                # --- Jarak kecil dari blok biar gak nabrak ---
-                # --- OFFSET TEGAK LURUS JALAN (ANTI NABRAK) ---
-                # ---------- SMART OFFSET ANTI TABRAK ----------
-                offset_dist = text_height * 1.2  # agak jauh biar aman
+                block_angle = block_rotation      # rotasi block adalah pedoman arah
                 
-                # dua sisi kemungkinan
-                block_angle = block_rotation  # rotasi block yang sudah dihitung benar
+                # dua sisi offset: kiri & kanan block
                 side1 = (block_angle + 90) % 360
                 side2 = (block_angle - 90) % 360
-
                 
-                # koordinat jika offset ke sisi1
                 dx1 = math.cos(math.radians(side1)) * offset_dist
                 dy1 = math.sin(math.radians(side1)) * offset_dist
                 p1 = Point(x + dx1, y + dy1)
                 
-                # koordinat jika offset ke sisi2
                 dx2 = math.cos(math.radians(side2)) * offset_dist
                 dy2 = math.sin(math.radians(side2)) * offset_dist
                 p2 = Point(x + dx2, y + dy2)
                 
-                # cari garis jalan terdekat
-                nearest_line = None
-                nearest_dist = float("inf")
-                for jp in jalan_paths:
-                    if 'xy_path' not in jp:
-                        continue
-                    line = LineString(jp['xy_path'])
-                    d = line.distance(Point(x, y))
-                    if d < nearest_dist:
-                        nearest_dist = d
-                        nearest_line = line
+                # cek jarak ke pole terdekat
+                dist1 = min((p1.distance(pp) for pp in pole_points), default=9999)
+                dist2 = min((p2.distance(pp) for pp in pole_points), default=9999)
                 
-                # pilih sisi yang lebih jauh dari jalan = pasti tidak nabrak
-                if nearest_line is not None:
-                    if nearest_line.distance(p1) > nearest_line.distance(p2):
-                        insert_point = (x + dx1, y + dy1)
-                    else:
-                        insert_point = (x + dx2, y + dy2)
+                # pilih sisi yang lebih aman (lebih jauh dari pole)
+                if dist1 >= dist2:
+                    insert_point = (x + dx1, y + dy1)
                 else:
-                    insert_point = (x + dx1, y + dy1)  # fallback
-
-
-
-
-            else:
-                insert_point = (x + 2, y)  # default tanpa rotasi
+                    insert_point = (x + dx2, y + dy2)
             
             # masukkan teks
             msp.add_text(
@@ -714,6 +704,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
