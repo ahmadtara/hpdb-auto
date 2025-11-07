@@ -539,60 +539,66 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 except Exception:
                     angle = 0.0
 
+          
+            # ---------------------------------------------------
+            text_rotation = block_rotation
             
-                # normalisasi dan hindari teks terbalik
-                angle = (angle + 360) % 360
-                if 90 < angle < 270:
-                    angle = (angle + 180) % 360
+            # Normalisasi
+            text_rotation = (text_rotation + 360) % 360
+            if 90 < text_rotation < 270:
+                text_rotation = (text_rotation + 180) % 360
             
-                # offset sedikit tegak lurus jalan supaya teks tidak nabrak garis
-                # offset dinamis agar teks tidak tabrakan dengan blok atau teks lain
-                text_height = 5.0 if layer_name in [
-                    "FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", 
+            # Tinggi teks
+            text_height = (
+                5.0 if layer_name in [
+                    "FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4",
                     "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"
-                ] else 1.5
-                
-                
-                # -----------------------------
-                #  SMART OFFSET ANTI TABRAK POLE
-                # -----------------------------
-                offset_dist = text_height * 1.3   # aman sedikit lebih jauh
-                
-                block_angle = block_rotation      # rotasi block adalah pedoman arah
-                
-                # dua sisi offset: kiri & kanan block
-                side1 = (block_angle + 90) % 360
-                side2 = (block_angle - 90) % 360
-                
-                dx1 = math.cos(math.radians(side1)) * offset_dist
-                dy1 = math.sin(math.radians(side1)) * offset_dist
-                p1 = Point(x + dx1, y + dy1)
-                
-                dx2 = math.cos(math.radians(side2)) * offset_dist
-                dy2 = math.sin(math.radians(side2)) * offset_dist
-                p2 = Point(x + dx2, y + dy2)
-                
-                # cek jarak ke pole terdekat
-                dist1 = min((p1.distance(pp) for pp in pole_points), default=9999)
-                dist2 = min((p2.distance(pp) for pp in pole_points), default=9999)
-                
-                # pilih sisi yang lebih aman (lebih jauh dari pole)
-                if dist1 >= dist2:
-                    insert_point = (x + dx1, y + dy1)
-                else:
-                    insert_point = (x + dx2, y + dy2)
+                ]
+                else 1.5
+            )
             
+            # ---------------------------------------------------
+            # OFFSET ANTI TABRAK POLE
+            # ---------------------------------------------------
+            offset_dist = text_height * 1.3
+            
+            side1 = (text_rotation + 90) % 360
+            side2 = (text_rotation - 90) % 360
+            
+            dx1 = math.cos(math.radians(side1)) * offset_dist
+            dy1 = math.sin(math.radians(side1)) * offset_dist
+            p1 = Point(x + dx1, y + dy1)
+            
+            dx2 = math.cos(math.radians(side2)) * offset_dist
+            dy2 = math.sin(math.radians(side2)) * offset_dist
+            p2 = Point(x + dx2, y + dy2)
+            
+            dist1 = min((p1.distance(pp) for pp in pole_points), default=9999)
+            dist2 = min((p2.distance(pp) for pp in pole_points), default=9999)
+            
+            if dist1 >= dist2:
+                insert_point = (x + dx1, y + dy1)
+            else:
+                insert_point = (x + dx2, y + dy2)
+            
+            # ---------------------------------------------------
+            # INSERT TEKS
+            # ---------------------------------------------------
+            
+    
             # masukkan teks
             msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
                     "insert": insert_point,
-                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"] else 1.5,
+                    "height": text_height,
                     "layer": text_layer,
                     "color": color_val,
-                    "rotation": float(angle)
+                    "rotation": float(text_rotation)
                 }
             )
+
+
 
 
 
@@ -704,6 +710,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
