@@ -546,15 +546,44 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 
                 # --- Jarak kecil dari blok biar gak nabrak ---
                 # --- OFFSET TEGAK LURUS JALAN (ANTI NABRAK) ---
-                offset_dist = text_height * 0.7   # 70% dari tinggi teks → jauh lebih aman
+                # ---------- SMART OFFSET ANTI TABRAK ----------
+                offset_dist = text_height * 1.2  # agak jauh biar aman
                 
-                # arah tegak lurus (normal vector)
-                normal_angle = (angle + 90) % 360
+                # dua sisi kemungkinan
+                side1 = (angle + 90) % 360
+                side2 = (angle - 90) % 360
                 
-                dx = math.cos(math.radians(normal_angle)) * offset_dist
-                dy = math.sin(math.radians(normal_angle)) * offset_dist
+                # koordinat jika offset ke sisi1
+                dx1 = math.cos(math.radians(side1)) * offset_dist
+                dy1 = math.sin(math.radians(side1)) * offset_dist
+                p1 = Point(x + dx1, y + dy1)
                 
-                insert_point = (x + dx, y + dy)
+                # koordinat jika offset ke sisi2
+                dx2 = math.cos(math.radians(side2)) * offset_dist
+                dy2 = math.sin(math.radians(side2)) * offset_dist
+                p2 = Point(x + dx2, y + dy2)
+                
+                # cari garis jalan terdekat
+                nearest_line = None
+                nearest_dist = float("inf")
+                for jp in jalan_paths:
+                    if 'xy_path' not in jp:
+                        continue
+                    line = LineString(jp['xy_path'])
+                    d = line.distance(Point(x, y))
+                    if d < nearest_dist:
+                        nearest_dist = d
+                        nearest_line = line
+                
+                # pilih sisi yang lebih jauh dari jalan = pasti tidak nabrak
+                if nearest_line is not None:
+                    if nearest_line.distance(p1) > nearest_line.distance(p2):
+                        insert_point = (x + dx1, y + dy1)
+                    else:
+                        insert_point = (x + dx2, y + dy2)
+                else:
+                    insert_point = (x + dx1, y + dy1)  # fallback
+
 
 
 
@@ -683,6 +712,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
