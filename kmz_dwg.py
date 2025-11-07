@@ -543,7 +543,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 ] else 1.5
                 
                 # offset berdasarkan tinggi teks
-                base_offset = 0.1
+                base_offset = 0.8
                 dx = math.cos(math.radians(angle - 90)) * base_offset
                 dy = math.sin(math.radians(angle - 90)) * base_offset
                 insert_point = [x + dx, y + dy]
@@ -553,7 +553,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 if not hasattr(msp, "all_text_points"):
                     msp.all_text_points = []
                 
-                min_dist_text = text_height * 3.0  # jarak minimum antar teks (semakin besar semakin renggang)
+                min_dist_text = text_height * 0.3  # jarak minimum antar teks (semakin besar semakin renggang)
                 shift_try = 0
                 max_shift_try = 10  # batas maksimal percobaan geser
                 
@@ -698,5 +698,6 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
