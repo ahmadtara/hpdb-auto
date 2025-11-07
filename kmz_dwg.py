@@ -430,17 +430,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
     for j in jalan_paths:
         if 'xy_path' not in j and j.get('coords'):
             j['xy_path'] = [latlon_to_xy(lat, lon) for lat, lon in j['coords']]
-
-
-    # KUMPULKAN SEMUA TITIK POLE (UNTUK ANTI TABRAK)
-    # --------------------------------------------
-    pole_points = []
-    for key in ["POLE", "NEW_POLE_7_3", "NEW_POLE_7_4",
-                "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"]:
-        for obj in classified.get(key, []):
-            if obj['type'] == 'point' and 'xy' in obj:
-                pole_points.append(Point(obj['xy']))
-                            
+            
     for layer_name, cat_items in classified.items():
         true_layer = layer_mapping.get(layer_name, layer_name)
         if layer_name in ("HP_COVER", "HP_UNCOVER"):
@@ -539,66 +529,64 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 except Exception:
                     angle = 0.0
 
-          
-            # ---------------------------------------------------
-            text_rotation = block_rotation
             
-            # Normalisasi
-            text_rotation = (text_rotation + 360) % 360
-            if 90 < text_rotation < 270:
-                text_rotation = (text_rotation + 180) % 360
+                # normalisasi dan hindari teks terbalik
+                angle = (angle + 360) % 360
+                if 90 < angle < 270:
+                    angle = (angle + 180) % 360
             
-            # Tinggi teks
-            text_height = (
-                5.0 if layer_name in [
-                    "FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4",
+                # offset sedikit tegak lurus jalan supaya teks tidak nabrak garis
+                # offset dinamis agar teks tidak tabrakan dengan blok atau teks lain
+                text_height = 5.0 if layer_name in [
+                    "FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", 
                     "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"
-                ]
-                else 1.5
-            )
-            
-            # ---------------------------------------------------
-            # OFFSET ANTI TABRAK POLE
-            # ---------------------------------------------------
-            offset_dist = text_height * 1.3
-            
-            side1 = (text_rotation + 90) % 360
-            side2 = (text_rotation - 90) % 360
-            
-            dx1 = math.cos(math.radians(side1)) * offset_dist
-            dy1 = math.sin(math.radians(side1)) * offset_dist
-            p1 = Point(x + dx1, y + dy1)
-            
-            dx2 = math.cos(math.radians(side2)) * offset_dist
-            dy2 = math.sin(math.radians(side2)) * offset_dist
-            p2 = Point(x + dx2, y + dy2)
-            
-            dist1 = min((p1.distance(pp) for pp in pole_points), default=9999)
-            dist2 = min((p2.distance(pp) for pp in pole_points), default=9999)
-            
-            if dist1 >= dist2:
-                insert_point = (x + dx1, y + dy1)
+                ] else 1.5
+                
+                # offset berdasarkan tinggi teks
+                base_offset = text_height * 1.2
+                dx = math.cos(math.radians(angle - 90)) * base_offset
+                dy = math.sin(math.radians(angle - 90)) * base_offset
+                insert_point = [x + dx, y + dy]
+                
+                # auto-geser kalau terlalu dekat dengan teks sebelumnya
+                # --- Simpan dan cek posisi teks lintas layer (semua layer penting dicek bareng) ---
+                if not hasattr(msp, "all_text_points"):
+                    msp.all_text_points = []
+                
+                min_dist_text = text_height * 3.0  # jarak minimum antar teks (semakin besar semakin renggang)
+                shift_try = 0
+                max_shift_try = 10  # batas maksimal percobaan geser
+                
+                while shift_try < max_shift_try:
+                    too_close = False
+                    for (tx, ty) in msp.all_text_points:
+                        dist2 = (insert_point[0] - tx)**2 + (insert_point[1] - ty)**2
+                        if dist2 < min_dist_text**2:
+                            too_close = True
+                            # geser sedikit lebih jauh ke arah tegak lurus
+                            insert_point[0] += math.cos(math.radians(angle - 90)) * (min_dist_text * 0.7)
+                            insert_point[1] += math.sin(math.radians(angle - 90)) * (min_dist_text * 0.7)
+                            break
+                    if not too_close:
+                        break
+                    shift_try += 1
+                
+                # simpan posisi teks ke daftar global (semua layer)
+                msp.all_text_points.append(tuple(insert_point))
             else:
-                insert_point = (x + dx2, y + dy2)
+                insert_point = (x + 2, y)  # default tanpa rotasi
             
-            # ---------------------------------------------------
-            # INSERT TEKS
-            # ---------------------------------------------------
-            
-    
             # masukkan teks
             msp.add_text(
                 obj.get("name", ""),
                 dxfattribs={
                     "insert": insert_point,
-                    "height": text_height,
+                    "height": 5.0 if layer_name in ["FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"] else 1.5,
                     "layer": text_layer,
                     "color": color_val,
-                    "rotation": float(text_rotation)
+                    "rotation": float(angle)
                 }
             )
-
-
 
 
 
@@ -710,21 +698,3 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
