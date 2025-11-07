@@ -542,20 +542,20 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"
                 ] else 1.5
                 
-                # --- Rotasi teks mengikuti arah jalan terdekat ---
-                angle = nearest_path_angle(x, y, jalan_paths) if jalan_paths else 0.0
                 
-                # --- Normalisasi dan cegah teks terbalik ---
-                angle = (angle + 360) % 360
-                if 90 < angle < 270:
-                    angle = (angle + 180) % 360
                 
                 # --- Jarak kecil dari blok biar gak nabrak ---
-                offset_dist = text_height * 0.15  # 15% dari tinggi teks
-                dx = math.cos(math.radians(angle - 90)) * offset_dist
-                dy = math.sin(math.radians(angle - 90)) * offset_dist
-                tx, ty = x + dx, y + dy
-                insert_point = (tx, ty)
+                # --- OFFSET TEGAK LURUS JALAN (ANTI NABRAK) ---
+                offset_dist = text_height * 0.7   # 70% dari tinggi teks → jauh lebih aman
+                
+                # arah tegak lurus (normal vector)
+                normal_angle = (angle + 90) % 360
+                
+                dx = math.cos(math.radians(normal_angle)) * offset_dist
+                dy = math.sin(math.radians(normal_angle)) * offset_dist
+                
+                insert_point = (x + dx, y + dy)
+
 
 
             else:
@@ -683,6 +683,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
