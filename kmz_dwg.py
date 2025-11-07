@@ -549,20 +549,30 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 insert_point = [x + dx, y + dy]
                 
                 # auto-geser kalau terlalu dekat dengan teks sebelumnya
-                if not hasattr(msp, "last_text_points"):
-                    msp.last_text_points = {}
+                # --- Simpan dan cek posisi teks lintas layer (semua layer penting dicek bareng) ---
+                if not hasattr(msp, "all_text_points"):
+                    msp.all_text_points = []
                 
-                if text_layer not in msp.last_text_points:
-                    msp.last_text_points[text_layer] = []
+                min_dist_text = text_height * 3.0  # jarak minimum antar teks (semakin besar semakin renggang)
+                shift_try = 0
+                max_shift_try = 10  # batas maksimal percobaan geser
                 
-                min_dist_text = text_height * 2.5
-                for (tx, ty) in msp.last_text_points[text_layer]:
-                    dist2 = (insert_point[0] - tx)**2 + (insert_point[1] - ty)**2
-                    if dist2 < min_dist_text**2:
-                        insert_point[0] += math.cos(math.radians(angle - 90)) * (min_dist_text * 0.6)
-                        insert_point[1] += math.sin(math.radians(angle - 90)) * (min_dist_text * 0.6)
-                msp.last_text_points[text_layer].append(tuple(insert_point))
-
+                while shift_try < max_shift_try:
+                    too_close = False
+                    for (tx, ty) in msp.all_text_points:
+                        dist2 = (insert_point[0] - tx)**2 + (insert_point[1] - ty)**2
+                        if dist2 < min_dist_text**2:
+                            too_close = True
+                            # geser sedikit lebih jauh ke arah tegak lurus
+                            insert_point[0] += math.cos(math.radians(angle - 90)) * (min_dist_text * 0.7)
+                            insert_point[1] += math.sin(math.radians(angle - 90)) * (min_dist_text * 0.7)
+                            break
+                    if not too_close:
+                        break
+                    shift_try += 1
+                
+                # simpan posisi teks ke daftar global (semua layer)
+                msp.all_text_points.append(tuple(insert_point))
             else:
                 insert_point = (x + 2, y)  # default tanpa rotasi
             
@@ -688,6 +698,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
