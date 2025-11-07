@@ -17,7 +17,7 @@ target_folders = {
 
 # mapping folder ➝ layer CAD
 layer_mapping = {
-    "CABLE": "FO 36 CORE",
+    "CABLE": "FO 24 CORE",
     "JALAN": "JALAN",
 }
 
