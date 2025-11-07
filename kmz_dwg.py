@@ -542,37 +542,22 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"
                 ] else 1.5
                 
-                # offset berdasarkan tinggi teks
-                base_offset = text_height * 0.1
-                dx = math.cos(math.radians(angle - 90)) * base_offset
-                dy = math.sin(math.radians(angle - 90)) * base_offset
-                insert_point = [x + dx, y + dy]
+                # --- Rotasi teks mengikuti arah jalan terdekat ---
+                angle = nearest_path_angle(x, y, jalan_paths) if jalan_paths else 0.0
                 
-                # auto-geser kalau terlalu dekat dengan teks sebelumnya
-                # --- Simpan dan cek posisi teks lintas layer (semua layer penting dicek bareng) ---
-                if not hasattr(msp, "all_text_points"):
-                    msp.all_text_points = []
+                # --- Normalisasi dan cegah teks terbalik ---
+                angle = (angle + 360) % 360
+                if 90 < angle < 270:
+                    angle = (angle + 180) % 360
                 
-                min_dist_text = text_height * 3.0  # jarak minimum antar teks (semakin besar semakin renggang)
-                shift_try = 0
-                max_shift_try = 10  # batas maksimal percobaan geser
-                
-                while shift_try < max_shift_try:
-                    too_close = False
-                    for (tx, ty) in msp.all_text_points:
-                        dist2 = (insert_point[0] - tx)**2 + (insert_point[1] - ty)**2
-                        if dist2 < min_dist_text**2:
-                            too_close = True
-                            # geser sedikit lebih jauh ke arah tegak lurus
-                            insert_point[0] += math.cos(math.radians(angle - 90)) * (min_dist_text * 0.7)
-                            insert_point[1] += math.sin(math.radians(angle - 90)) * (min_dist_text * 0.7)
-                            break
-                    if not too_close:
-                        break
-                    shift_try += 1
-                
-                # simpan posisi teks ke daftar global (semua layer)
-                msp.all_text_points.append(tuple(insert_point))
+                # --- Jarak kecil dari blok biar gak nabrak ---
+                offset_dist = text_height * 0.15  # 15% dari tinggi teks
+                dx = math.cos(math.radians(angle - 90)) * offset_dist
+                dy = math.sin(math.radians(angle - 90)) * offset_dist
+                tx, ty = x + dx, y + dy
+                insert_point = (tx, ty)
+
+
             else:
                 insert_point = (x + 2, y)  # default tanpa rotasi
             
@@ -698,6 +683,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
