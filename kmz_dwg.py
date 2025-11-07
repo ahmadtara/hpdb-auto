@@ -440,38 +440,71 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 continue
             x, y = obj['xy']
             block_name = None
-            # prefer using block_mapping for new/existing poles
+             # prefer using block_mapping for new/existing poles
             if layer_name == "FAT" and matchblock_fat:
                 block_name = matchblock_fat.name if hasattr(matchblock_fat, "name") else (matchblock_fat.dxf.name if hasattr(matchblock_fat, "dxf") else None)
             elif layer_name == "FDT" and matchblock_fdt:
                 block_name = matchblock_fdt.name if hasattr(matchblock_fdt, "name") else (matchblock_fdt.dxf.name if hasattr(matchblock_fdt, "dxf") else None)
-            elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE"]:
+            else:
+                # try map all others via block_mapping (safer than listing)
                 block_name = block_mapping.get(layer_name)
 
+
             if block_name:
+                # try to find actual block name in doc.blocks (case-sensitive); fallback to case-insensitive/substring
+                actual_block_name = None
+                if block_name in doc.blocks:
+                    actual_block_name = block_name
+                else:
+                    # case-insensitive or substring matching
+                    for b in doc.blocks:
+                        try:
+                            if b.lower() == block_name.lower() or block_name.lower() in b.lower() or b.lower() in block_name.lower():
+                                actual_block_name = b
+                                break
+                        except Exception:
+                            continue
+
+                if actual_block_name is None:
+                    st.warning(f"⚠️ Block '{block_name}' not found in template DXF. Drawing fallback circle at ({x:.3f},{y:.3f}).")
+                    msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+                    continue
+
                 try:
+                    # scale selection (tambahkan 7_2.5 & 9_4 ke aturan scale)
                     if layer_name in ["FDT", "FAT"]:
                         scale = 0.0025
-                    elif layer_name in ["NEW_POLE_7_3", "POLE", "EXISTING_POLE"]:
+                    elif layer_name in ["NEW_POLE_7_3", "NEW_POLE_7_4", "NEW_POLE_7_2.5", "NEW_POLE_9_4", "POLE", "EXISTING_POLE"]:
                         scale = 1.0
-                    elif layer_name in ["NEW_POLE_7_4"]:
-                        scale = 0.001
                     else:
                         scale = 1.0
 
+                    # compute rotation for block if rotation enabled for layer
+                    block_rotation = 0.0
+                    if rotate_fdt_fat_pole and rotate_layers.get(layer_name, False):
+                        try:
+                            block_rotation = nearest_path_angle(x, y, jalan_paths) if jalan_paths else 0.0
+                        except Exception:
+                            block_rotation = 0.0
+                        block_rotation = (block_rotation + 360) % 360
+                        if 90 < block_rotation < 270:
+                            block_rotation = (block_rotation + 180) % 360
+
+                    # insert blockref with rotation
                     msp.add_blockref(
-                        block_name, (x, y),
+                        actual_block_name, (x, y),
                         dxfattribs={
                             "layer": true_layer,
                             "xscale": scale,
                             "yscale": scale,
-                            "zscale": scale
+                            "zscale": scale,
+                            "rotation": float(block_rotation)
                         }
                     )
                 except Exception as e:
-                    st.warning(f"Gagal insert block {block_name}: {e}")
-                    # fallback: circle if block insertion failed
+                    st.warning(f"Gagal insert block {actual_block_name}: {e}")
                     msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
+
             else:
                 # fallback kalau tidak ada block
                 msp.add_circle(center=(x, y), radius=2, dxfattribs={"layer": true_layer})
@@ -593,7 +626,10 @@ def run_kmz_to_dwg():
         "POLE": st.sidebar.checkbox("POLE", value=True),
         "NEW_POLE_7_3": st.sidebar.checkbox("NEW POLE 7-3", value=True),
         "NEW_POLE_7_4": st.sidebar.checkbox("NEW POLE 7-4", value=True),
-        "EXISTING_POLE": st.sidebar.checkbox("EXISTING POLE", value=True)
+        "EXISTING_POLE": st.sidebar.checkbox("EXISTING POLE", value=True),
+        "NEW_POLE_7_2.5": st.sidebar.checkbox("NEW POLE 7-2.5", value=True),
+        "NEW_POLE_9_4": st.sidebar.checkbox("NEW POLE 9-4", value=True)
+
     }
 
 
@@ -628,5 +664,6 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
