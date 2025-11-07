@@ -553,7 +553,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                 if not hasattr(msp, "all_text_points"):
                     msp.all_text_points = []
                 
-                min_dist_text = text_height * 0.9  # jarak minimum antar teks (semakin besar semakin renggang)
+                min_dist_text = text_height * 1.0  # jarak minimum antar teks (semakin besar semakin renggang)
                 shift_try = 0
                 max_shift_try = 10  # batas maksimal percobaan geser
                 
@@ -700,6 +700,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
