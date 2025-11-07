@@ -274,7 +274,7 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                             rotate_fdt_fat_pole=True, rotate_layers=None):
     if rotate_layers is None:
         rotate_layers = {"FDT": True, "FAT": True, "POLE": True,
-                         "NEW_POLE_7_3": True, "NEW_POLE_7_4": True, NEW_POLE_7_2.5: True, NEW_POLE_9_4: True,
+                         "NEW_POLE_7_3": True, "NEW_POLE_7_4": True, "NEW_POLE_7_2.5": True, "NEW_POLE_9_4": True,
                          "EXISTING_POLE": True}
 
 
@@ -664,6 +664,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
