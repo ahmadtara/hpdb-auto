@@ -14,7 +14,7 @@ from statistics import mean
 transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 target_folders = {
-    'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4',
+    'FDT', 'FAT', 'HP COVER', 'HP UNCOVER', 'NEW POLE 7-3', 'NEW POLE 7-4', 'NEW POLE 7-2.5', 'NEW POLE 9-4',
     'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
     'BOUNDARY', 'DISTRIBUTION CABLE', 'SLING WIRE', 'KOTAK', 'JALAN'
 }
@@ -101,7 +101,7 @@ def apply_offset(points_xy):
 def classify_items(items):
     classified = {name: [] for name in [
         "FDT", "FAT", "HP_COVER", "HP_UNCOVER",
-        "NEW_POLE_7_3", "NEW_POLE_7_4", "EXISTING_POLE", "POLE",
+        "NEW_POLE_7_3", "NEW_POLE_7_4", 'NEW_POLE_7_2.5', 'NEW_POLE_9_4', "EXISTING_POLE", "POLE",
         "BOUNDARY", "DISTRIBUTION_CABLE", "SLING_WIRE", "KOTAK", "JALAN"
     ]}
     for it in items:
@@ -118,6 +118,10 @@ def classify_items(items):
             classified["NEW_POLE_7_3"].append(it)
         elif "NEW POLE 7-4" in folder:
             classified["NEW_POLE_7_4"].append(it)
+        elif "NEW POLE 7-2.5" in folder:
+            classified["NEW_POLE_7_2.5"].append(it)
+        elif "NEW POLE 9-4" in folder:
+            classified["NEW_POLE_9_4"].append(it)
         elif "EXISTING POLE" in folder or "EMR" in folder:
             classified["EXISTING_POLE"].append(it)
         elif "BOUNDARY" in folder:
@@ -287,6 +291,8 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
         "POLE": "A$C14dd5346",
         "NEW_POLE_7_3": "A$C14dd5346",
         "NEW_POLE_7_4": "np9",
+        "NEW_POLE_7_2.5": "newp72",
+        "NEW_POLE_9_4": "newp94",
         "EXISTING_POLE": "A$Cdb6fd7d1"
     }
 
@@ -622,4 +628,5 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
