@@ -536,10 +536,33 @@ def build_dxf_with_smart_hp(classified, template_path, output_path,
                     angle = (angle + 180) % 360
             
                 # offset sedikit tegak lurus jalan supaya teks tidak nabrak garis
-                offset_dist = 4  # jarak teks dari blok
-                dx = math.cos(math.radians(angle - 90)) * offset_dist
-                dy = math.sin(math.radians(angle - 90)) * offset_dist
-                insert_point = (x + dx, y + dy)
+                # offset dinamis agar teks tidak tabrakan dengan blok atau teks lain
+                text_height = 5.0 if layer_name in [
+                    "FDT", "FAT", "NEW_POLE_7_3", "NEW_POLE_7_4", 
+                    "NEW_POLE_7_2.5", "NEW_POLE_9_4", "EXISTING_POLE"
+                ] else 1.5
+                
+                # offset berdasarkan tinggi teks
+                base_offset = text_height * 1.2
+                dx = math.cos(math.radians(angle - 90)) * base_offset
+                dy = math.sin(math.radians(angle - 90)) * base_offset
+                insert_point = [x + dx, y + dy]
+                
+                # auto-geser kalau terlalu dekat dengan teks sebelumnya
+                if not hasattr(msp, "last_text_points"):
+                    msp.last_text_points = {}
+                
+                if text_layer not in msp.last_text_points:
+                    msp.last_text_points[text_layer] = []
+                
+                min_dist_text = text_height * 2.5
+                for (tx, ty) in msp.last_text_points[text_layer]:
+                    dist2 = (insert_point[0] - tx)**2 + (insert_point[1] - ty)**2
+                    if dist2 < min_dist_text**2:
+                        insert_point[0] += math.cos(math.radians(angle - 90)) * (min_dist_text * 0.6)
+                        insert_point[1] += math.sin(math.radians(angle - 90)) * (min_dist_text * 0.6)
+                msp.last_text_points[text_layer].append(tuple(insert_point))
+
             else:
                 insert_point = (x + 2, y)  # default tanpa rotasi
             
@@ -665,6 +688,7 @@ def run_kmz_to_dwg():
 
 if __name__ == "__main__":
     run_kmz_to_dwg()
+
 
 
 
