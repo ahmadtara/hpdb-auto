@@ -1,4 +1,4 @@
-# kml_converter.py
+# kml_converter_fixed.py
 import os
 import zipfile
 import requests
@@ -60,11 +60,10 @@ def get_osm_roads(polygon):
         return gpd.GeoDataFrame()
     # filter hanya garis
     roads = roads[roads.geometry.type.isin(["LineString", "MultiLineString"])]
-    # flatten multi-part rows
+    # flatten multi-part rows (compatibility across geopandas versions)
     try:
         roads = roads.explode(index_parts=False)
     except TypeError:
-        # older geopandas uses different explode signature
         roads = roads.explode()
     roads = roads[~roads.geometry.is_empty & roads.geometry.notnull()]
     # pastikan CRS 4326
@@ -103,20 +102,20 @@ def get_here_roads(polygon):
 def export_to_kml_simple(gdf, polygon, output_path, include_geojson=False):
     """
     Export roads GeoDataFrame (EPSG:4326) and polygon boundary to a KML file using simplekml.
-    Optionally also export a GeoJSON for debugging.
+    This version safely handles 2D/3D coordinates by taking only lon/lat components.
     """
     kml_obj = simplekml.Kml()
 
     # Boundary: create polygon placemark(s)
     if polygon is not None:
         if isinstance(polygon, Polygon):
-            outer = [(x, y) for x, y in polygon.exterior.coords]
+            outer = [(coord[0], coord[1]) for coord in polygon.exterior.coords]
             pol = kml_obj.newpolygon(name="Boundary")
             pol.outerboundaryis = outer
             pol.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.blue)
         elif isinstance(polygon, MultiPolygon):
             for i, p in enumerate(polygon.geoms):
-                outer = [(x, y) for x, y in p.exterior.coords]
+                outer = [(coord[0], coord[1]) for coord in p.exterior.coords]
                 pol = kml_obj.newpolygon(name=f"Boundary_{i+1}")
                 pol.outerboundaryis = outer
                 pol.style.polystyle.color = simplekml.Color.changealphaint(100, simplekml.Color.blue)
@@ -131,14 +130,20 @@ def export_to_kml_simple(gdf, polygon, output_path, include_geojson=False):
         style = COLOR_MAP.get(layer, COLOR_MAP["OTHER"])
 
         if isinstance(geom, LineString):
+            coords = [(coord[0], coord[1]) for coord in geom.coords]
+            if len(coords) < 2:
+                continue
             ls = kml_obj.newlinestring(name=layer, description=f"highway={hwy}")
-            ls.coords = [(x, y) for x, y in geom.coords]
+            ls.coords = coords
             ls.style.linestyle.width = style["width"]
             ls.style.linestyle.color = style["color"]
         elif isinstance(geom, MultiLineString):
             for i, part in enumerate(geom.geoms):
+                coords = [(coord[0], coord[1]) for coord in part.coords]
+                if len(coords) < 2:
+                    continue
                 ls = kml_obj.newlinestring(name=f"{layer}_{i+1}", description=f"highway={hwy}")
-                ls.coords = [(x, y) for x, y in part.coords]
+                ls.coords = coords
                 ls.style.linestyle.width = style["width"]
                 ls.style.linestyle.color = style["color"]
         else:
@@ -152,9 +157,9 @@ def export_to_kml_simple(gdf, polygon, output_path, include_geojson=False):
     if include_geojson:
         geojson_path = os.path.splitext(output_path)[0] + ".geojson"
         try:
+            # write only lines to geojson
             gdf.to_file(geojson_path, driver="GeoJSON")
         except Exception:
-            # ignore failures to write geojson
             pass
 
 # ---------------------- PROSES UTAMA ----------------------
@@ -199,3 +204,4 @@ def run_kml_dxf():
                             st.download_button("⬇️ Download GeoJSON", data=gf, file_name="roadmap.geojson")
             except Exception as e:
                 st.error(f"❌ Terjadi kesalahan: {e}")
+
