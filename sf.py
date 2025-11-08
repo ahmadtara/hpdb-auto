@@ -10,10 +10,12 @@ transformer = Transformer.from_crs("EPSG:4326", "EPSG:32760", always_xy=True)
 
 # hanya folder yang dipakai
 target_folders = {
-    'FDT', 'NEW POLE 7-4', 'NEW POLE 9-4', 'EXISTING POLE EMR 7-4',
+    'FDT', 'NEW POLE 7-4', 'NEW POLE 9-4', 
+    'EXISTING POLE EMR 7-4', 'EXISTING POLE EMR 7-3',
     'EXISTING POLE EMR 9-4', 'CABLE',
     'JOINT CLOSURE', 'SLACK HANGER', 'JALAN'
 }
+
 
 # mapping folder ➝ layer CAD
 layer_mapping = {
@@ -200,10 +202,10 @@ def draw_to_template(classified, template_path):
             elif layer_name == "NEW_POLE_74":
                 block_name = "A$C14dd5346"
             elif layer_name == "NEW_POLE_94":
-                block_name = "np9"
+                block_name = "newp94"
             elif layer_name == "EXISTING_POLE":
                 block_name = "A$Cdb6fd7d1" if obj['folder'] in [
-                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3"
+                    "EXISTING POLE EMR 7-4", "EXISTING POLE EMR 7-3", "EXISTING POLE EMR 9-4"
                 ] else "A$C14dd5346"
             elif layer_name == "CLOSURE":
                 block_name = "CLOSURE"
