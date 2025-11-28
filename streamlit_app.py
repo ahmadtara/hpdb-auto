@@ -4,8 +4,8 @@ import requests
 import time
 
 # -------------- ✅ KONFIGURASI ---------------- #
-TELEGRAM_TOKEN = "7656007924:AAGi1it2M7jE0Sen28myiPhEmYPd1-jsI_Q"
-TELEGRAM_CHAT_ID = "6122753506"
+TELEGRAM_TOKEN = "8576524816:AAGICXsqymDZU_V74EUWJtC9s265BTzM9bs"
+TELEGRAM_CHAT_ID = "6791624792"
 HERE_API_KEY = "jGCMpa59MeURAH39Vzk94kutVqC3vl714_ZvcHodX14"
 
 
@@ -194,6 +194,7 @@ else:
         st.session_state["user"] = None
         st.session_state["login_time"] = None
         st.rerun()
+
 
 
 
