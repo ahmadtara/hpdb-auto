@@ -251,6 +251,9 @@ def run_hpdb(HERE_API_KEY):
 
 
         df = pd.read_excel(template_file, sheet_name="Homepass Database")
+
+# 🔥 FIX: paksa semua kolom jadi fleksibel (hindari TypeError)
+        df = df.astype(object)
         expected_cols = ["FDT Tray (Front)", "FDT Port", "Tube Colour", "Core Number"]
         mapping_df = df[expected_cols].dropna(how="all").reset_index(drop=True)
 
@@ -410,12 +413,20 @@ def run_hpdb(HERE_API_KEY):
         # ✅ Tambahkan di sini, di luar loop utama
         if use_smart_fill:
             street_list = smart_fill_streets(street_list)
-        
+        # 🔥 FIX TYPE ERROR
+        # 🔥 Pastikan semua list aman (string)
+        block_list = [str(x) for x in block_list]
+        homenumber_list = [str(x) for x in homenumber_list]
+        fatcode_list = [str(x) for x in fatcode_list]
+        street_list = [str(x) for x in street_list]
+        fat_id_list = [str(x) for x in fat_id_list]
+        pole_id_list = [str(x) for x in pole_id_list]
+        fat_address_list = [str(x) for x in fat_address_list]
         # Assign lists to dataframe in batch (only for the rows we processed)
         idx_slice = df.index[:n_rows]
-        df.loc[idx_slice, "fatcode"] = fatcode_list
-        df.loc[idx_slice, "block"] = block_list
-        df.loc[idx_slice, "homenumber"] = homenumber_list
+        df.loc[idx_slice, "fatcode"] = pd.Series(fatcode_list, index=idx_slice)
+        df.loc[idx_slice, "block"] = pd.Series(block_list, index=idx_slice)
+        df.loc[idx_slice, "homenumber"] = pd.Series(homenumber_list, index=idx_slice)
         df.loc[idx_slice, "Latitude_homepass"] = lat_list
         df.loc[idx_slice, "Longitude_homepass"] = lon_list
         df.loc[idx_slice, "district"] = district_list
