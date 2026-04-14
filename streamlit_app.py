@@ -6,7 +6,7 @@ import time
 # -------------- ✅ KONFIGURASI ---------------- #
 TELEGRAM_TOKEN = "8576524816:AAGICXsqymDZU_V74EUWJtC9s265BTzM9bs"
 TELEGRAM_CHAT_ID = "6791624792"
-HERE_API_KEY = "M7CWgw9NFBDqvZ80wCJkCCHTOhJDBTg45RKFsavtP48"
+HERE_API_KEY = "ti_oA5QD2UI_e_rYUIsnjaUGfPfOgMo4j_GYqZLPsSU"
 
 
 BOT_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
