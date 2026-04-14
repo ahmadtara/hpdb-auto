@@ -18,9 +18,9 @@ SESSION_TIMEOUT = 86400  # 1 jam = 3600 detik
 
 # -------------- ✅ USER LOGIN ---------------- #
 valid_users = {
-    "yoshua1": "yoshua1",
-    "dion1": "dion1",
-    "ucok1": "ucok1"
+    "sndta": "sndta",
+    "king": "king",
+    "gan": "gan"
 }
 blocked_users = set()
 
